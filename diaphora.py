@@ -24,7 +24,8 @@ import sys
 import time
 import json
 import decimal
-import sqlite3
+import mysql.connector
+import logging
 import threading
 
 from threading import Thread
@@ -43,6 +44,9 @@ try:
   is_ida = True
 except ImportError:
   is_ida = False
+
+_log = logging.getLogger("diaphora")
+_log.setLevel(logging.DEBUG)
 
 #-------------------------------------------------------------------------------
 VERSION_VALUE = "2.0.4"
@@ -99,17 +103,23 @@ def ast_ratio(ast1, ast2):
 
 #-------------------------------------------------------------------------------
 def log(msg):
-  if isinstance(threading.current_thread(), threading._MainThread):
-    print(("[%s] %s" % (time.asctime(), msg)))
+  print(("[%s] %s" % (time.asctime(), msg)))
 
 #-------------------------------------------------------------------------------
 def log_refresh(msg, show=False, do_log=True):
-  log(msg)
+  print(msg)
 
 #-------------------------------------------------------------------------------
 def debug_refresh(msg, show=False):
   if os.getenv("DIAPHORA_DEBUG"):
     log(msg)
+
+#-------------------------------------------------------------------------------
+def get_db_attrs():
+  f = open("db.json")
+  j = json.loads(f.read())
+  f.close()
+  return j
 
 #-------------------------------------------------------------------------------
 class CChooser():
@@ -267,15 +277,6 @@ class CBinDiff:
 
   def __del__(self):
     if self.db is not None:
-      try:
-        if self.last_diff_db is not None:
-          tid = threading.current_thread().ident
-          if tid in self.dbs_dict:
-            db = self.dbs_dict[tid]
-            with db.cursor() as cur:
-              cur.execute('detach "%s"' % self.last_diff_db)
-      except:
-        pass
       self.db_close()
 
   def get_value_for(self, value_name, default):
@@ -288,16 +289,17 @@ class CBinDiff:
     return default
 
   def open_db(self):
-    db = sqlite3.connect(self.db_name, check_same_thread=True)
-    db.text_factory = str
-    db.row_factory = sqlite3.Row
+    db_attrs = get_db_attrs()
+    db = mysql.connector.connect(
+      user=db_attrs["user"], password=db_attrs["password"],
+      host=db_attrs["host"]
+    )
 
     tid = threading.current_thread().ident
     self.dbs_dict[tid] = db
     if isinstance(threading.current_thread(), threading._MainThread):
       self.db = db
       self.create_schema()
-      db.execute("analyze")
 
   def get_db(self):
     tid = threading.current_thread().ident
@@ -309,7 +311,7 @@ class CBinDiff:
 
   def db_cursor(self):
     db = self.get_db()
-    return db.cursor()
+    return db.cursor(dictionary=True)
 
   def db_close(self):
     tid = threading.current_thread().ident
@@ -321,10 +323,15 @@ class CBinDiff:
 
   def create_schema(self):
     cur = self.db_cursor()
-    cur.execute("PRAGMA foreign_keys = ON")
+
+    sql = f""" create database if not exists `%s` """
+    cur.execute(sql, (self.db_name))
+
+    sql = f""" use `%s` """
+    cur.execute(sql, (self.db_name))
 
     sql = """ create table if not exists functions (
-                        id integer primary key,
+                        id integer primary key auto_increment,
                         name varchar(255),
                         address text unique,
                         nodes integer,
@@ -341,12 +348,12 @@ class CBinDiff:
                         comment text,
                         mangled_function text,
                         bytes_hash text,
-                        pseudocode text,
+                        pseudocode mediumtext,
                         pseudocode_lines integer,
                         pseudocode_hash1 text,
                         pseudocode_primes text,
                         function_flags integer,
-                        assembly text,
+                        assembly mediumtext,
                         prototype2 text,
                         pseudocode_hash2 text,
                         pseudocode_hash3 text,
@@ -355,8 +362,8 @@ class CBinDiff:
                         rva text unique,
                         tarjan_topological_sort text,
                         strongly_connected_spp text,
-                        clean_assembly text,
-                        clean_pseudo text,
+                        clean_assembly mediumtext,
+                        clean_pseudo mediumtext,
                         mnemonics_spp text,
                         switches text,
                         function_hash text,
@@ -371,7 +378,7 @@ class CBinDiff:
     cur.execute(sql)
 
     sql = """ create table if not exists program (
-                id integer primary key,
+                id integer primary key auto_increment,
                 callgraph_primes text,
                 callgraph_all_primes text,
                 processor text,
@@ -380,7 +387,7 @@ class CBinDiff:
     cur.execute(sql)
 
     sql = """ create table if not exists program_data (
-                id integer primary key,
+                id integer primary key auto_increment,
                 name varchar(255),
                 type varchar(255),
                 value text
@@ -391,7 +398,7 @@ class CBinDiff:
     cur.execute(sql)
 
     sql = """ create table if not exists instructions (
-                id integer primary key,
+                id integer primary key auto_increment,
                 address text unique,
                 disasm text,
                 mnemonic text,
@@ -404,38 +411,38 @@ class CBinDiff:
     cur.execute(sql)
 
     sql = """ create table if not exists basic_blocks (
-                id integer primary key,
+                id integer primary key auto_increment,
                 num integer,
                 address text unique)"""
     cur.execute(sql)
 
     sql = """ create table if not exists bb_relations (
-                id integer primary key,
+                id integer primary key auto_increment,
                 parent_id integer not null references basic_blocks(id) ON DELETE CASCADE,
                 child_id integer not null references basic_blocks(id) ON DELETE CASCADE)"""
     cur.execute(sql)
 
     sql = """ create table if not exists bb_instructions (
-                id integer primary key,
+                id integer primary key auto_increment,
                 basic_block_id integer references basic_blocks(id) on delete cascade,
                 instruction_id integer references instructions(id) on delete cascade)"""
     cur.execute(sql)
 
     sql = """ create table if not exists function_bblocks (
-                id integer primary key,
+                id integer primary key auto_increment,
                 function_id integer not null references functions(id) on delete cascade,
                 basic_block_id integer not null references basic_blocks(id) on delete cascade)"""
     cur.execute(sql)
     
     sql = """create table if not exists callgraph (
-                id integer primary key,
+                id integer primary key auto_increment,
                 func_id integer not null references functions(id) on delete cascade,
                 address text not null,
                 type text not null)"""
     cur.execute(sql)
 
     sql = """create table if not exists constants (
-                id integer primary key,
+                id integer primary key auto_increment,
                 func_id integer not null references functions(id) on delete cascade,
                 constant text not null)"""
     cur.execute(sql)
@@ -443,7 +450,7 @@ class CBinDiff:
     cur.execute("select 1 from version")
     row = cur.fetchone()
     if not row:
-      cur.execute("insert into main.version values ('%s')" % VERSION_VALUE)
+      cur.execute("insert into version values ('%s')" % VERSION_VALUE)
 
     cur.close()
 
@@ -570,36 +577,34 @@ class CBinDiff:
     cur.close()
 
   def attach_database(self, diff_db):
-    cur = self.db_cursor()
-    cur.execute('attach "%s" as diff' % diff_db)
-    cur.close()
+    return None
 
   def equal_db(self):
     cur = self.db_cursor()
-    sql = "select count(*) total from program p, diff.program dp where p.md5sum = dp.md5sum"
+    sql = f"select count(*) total from program p, `{self.last_diff_db}`.program dp where p.md5sum = dp.md5sum"
     cur.execute(sql)
     row = cur.fetchone()
     ret = row["total"] == 1
-    if not ret:
-      sql = "select count(*) total from (select * from functions except select * from diff.functions) x"
-      cur.execute(sql)
-      row = cur.fetchone()
-      ret = row["total"] == 0
-    else:
-      log("Same MD5 in both databases")
+    # if not ret:
+    #   sql = f"select count(*) total from (select * from functions except select * from `{self.last_diff_db}`.functions) x"
+    #   cur.execute(sql)
+    #   row = cur.fetchone()
+    #   ret = row["total"] == 0
+    # else:
+    #   log("Same MD5 in both databases")
     cur.close()
     return ret
 
   def add_program_data(self, type_name, key, value):
     cur = self.db_cursor()
-    sql = "insert into main.program_data (name, type, value) values (?, ?, ?)"
+    sql = "insert into program_data (name, type, value) values (%s, %s, %s)"
     values = (key, type_name, value)
     cur.execute(sql, values)
     cur.close()
 
   def get_instruction_id(self, addr):
     cur = self.db_cursor()
-    sql = "select id from instructions where address = ?"
+    sql = "select id from instructions where address = %s"
     cur.execute(sql, (str(addr),))
     row = cur.fetchone()
     rowid = None
@@ -610,7 +615,7 @@ class CBinDiff:
 
   def get_bb_id(self, addr):
     cur = self.db_cursor()
-    sql = "select id from basic_blocks where address = ?"
+    sql = "select id from basic_blocks where address = %s"
     cur.execute(sql, (str(addr),))
     row = cur.fetchone()
     rowid = None
@@ -640,7 +645,7 @@ class CBinDiff:
       else:
         new_props.append(prop)
 
-    sql = """insert into main.functions (name, nodes, edges, indegree, outdegree, size,
+    sql = """insert into functions (name, nodes, edges, indegree, outdegree, size,
                                     instructions, mnemonics, names, prototype,
                                     cyclomatic_complexity, primes_value, address,
                                     comment, mangled_function, bytes_hash, pseudocode,
@@ -652,9 +657,9 @@ class CBinDiff:
                                     function_hash, bytes_sum, md_index, constants,
                                     constants_count, segment_rva, assembly_addrs, kgh_hash,
                                     userdata)
-                                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+                                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
 
     try:
       cur.execute(sql, new_props)
@@ -666,7 +671,7 @@ class CBinDiff:
 
     # Phase 2: Save the callers and callees of the function
     callers, callees = props[len(props)-4:len(props)-2]
-    sql = "insert into callgraph (func_id, address, type) values (?, ?, ?)"
+    sql = "insert into callgraph (func_id, address, type) values (%s, %s, %s)"
     for caller in callers:
       cur.execute(sql, (func_id, str(caller), 'caller'))
     
@@ -674,7 +679,7 @@ class CBinDiff:
       cur.execute(sql, (func_id, str(callee), 'callee'))
 
     # Phase 3: Insert the constants of the function
-    sql = "insert into constants (func_id, constant) values (?, ?)"
+    sql = "insert into constants (func_id, constant) values (%s, %s)"
     props_dict = self.create_function_dictionary(props)
     for constant in props_dict["constants"]:
       if type(constant) in [str, bytes] and len(constant) > 4:
@@ -685,11 +690,11 @@ class CBinDiff:
       # The last 2 fields are basic_blocks_data & bb_relations
       bb_data, bb_relations = props[len(props)-2:]
       instructions_ids = {}
-      sql = """insert into main.instructions (address, mnemonic, disasm,
+      sql = """insert into instructions (address, mnemonic, disasm,
                                               comment1, comment2, name,
                                               type, pseudocomment,
                                               pseudoitp)
-                                values (?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+                                values (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
       self_get_instruction_id = self.get_instruction_id
       cur_execute = cur.execute
       for key in bb_data:
@@ -708,8 +713,8 @@ class CBinDiff:
 
       num = 0
       bb_ids = {}
-      sql1 = "insert into main.basic_blocks (num, address) values (?, ?)"
-      sql2 = "insert into main.bb_instructions (basic_block_id, instruction_id) values (?, ?)"
+      sql1 = "insert into basic_blocks (num, address) values (%s, %s)"
+      sql2 = "insert into bb_instructions (basic_block_id, instruction_id) values (%s, %s)"
 
       self_get_bb_id = self.get_bb_id
       for key in bb_data:
@@ -728,7 +733,7 @@ class CBinDiff:
           cur_execute(sql2, (last_bb_id, ins_id))
 
       # Insert relations between basic blocks
-      sql = "insert into main.bb_relations (parent_id, child_id) values (?, ?)"
+      sql = "insert into bb_relations (parent_id, child_id) values (%s, %s)"
       for key in bb_relations:
         for bb in bb_relations[key]:
           bb = str(bb)
@@ -740,7 +745,7 @@ class CBinDiff:
             log("Error: %s" % str(sys.exc_info()[1]))
 
       # And finally insert the functions to basic blocks relations
-      sql = "insert into main.function_bblocks (function_id, basic_block_id) values (?, ?)"
+      sql = "insert into function_bblocks (function_id, basic_block_id) values (%s, %s)"
       for key in bb_ids:
         bb_id = bb_ids[key]
         cur_execute(sql, (func_id, bb_id))
@@ -911,7 +916,7 @@ class CBinDiff:
                  and bbins.basic_block_id = bb.id
                  and bb.id = fb.basic_block_id
                  and f.id = fb.function_id
-                 and f.address = ?
+                 and f.address = %s
                order by bb.address asc""" % (db, db, db, db, db)
     cur.execute(sql, (str(ea1),))
     bb_blocks = {}
@@ -943,7 +948,7 @@ class CBinDiff:
              where f.id = fbs.function_id
                and bbs.id = fbs.basic_block_id
                and fbs.basic_block_id = bbr.child_id
-               and f.address = ?
+               and f.address = %s
              order by 1 asc, 2 asc""" % (db, db, db, db, db, db)
     cur.execute(sql, (str(ea1), ))
     rows = result_iter(cur)
@@ -962,7 +967,7 @@ class CBinDiff:
 
   def delete_function(self, ea):
     cur = self.db_cursor()
-    cur.execute("delete from functions where address = ?", (str(ea), ))
+    cur.execute("delete from functions where address = %s", (str(ea), ))
     cur.close()
 
   def is_auto_generated(self, name):
@@ -973,9 +978,9 @@ class CBinDiff:
 
   def check_callgraph(self):
     cur = self.db_cursor()
-    sql = """select callgraph_primes, callgraph_all_primes from program
+    sql = f"""select callgraph_primes, callgraph_all_primes from program
              union all
-             select callgraph_primes, callgraph_all_primes from diff.program"""
+             select callgraph_primes, callgraph_all_primes from `{self.last_diff_db}`.program"""
     cur.execute(sql)
     rows = cur.fetchall()
     if len(rows) == 2:
@@ -1007,9 +1012,9 @@ class CBinDiff:
   def find_equal_matches_parallel(self):
     cur = self.db_cursor()
     # Start by calculating the total number of functions in both databases
-    sql = """select count(*) total from functions
+    sql = f"""select count(*) total from functions
              union all
-             select count(*) total from diff.functions"""
+             select count(*) total from `{self.last_diff_db}`.functions"""
     cur.execute(sql)
     rows = cur.fetchall()
     if len(rows) != 2:
@@ -1019,7 +1024,7 @@ class CBinDiff:
     self.total_functions1 = rows[0]["total"]
     self.total_functions2 = rows[1]["total"]
 
-    sql = "select address ea, mangled_function, nodes from (select * from functions intersect select * from diff.functions) x"
+    sql = f"select address ea, mangled_function, nodes from (select * from functions intersect select * from `{self.last_diff_db}`.functions) x"
     cur.execute(sql)
     rows = cur.fetchall()
     if len(rows) > 0:
@@ -1094,7 +1099,9 @@ class CBinDiff:
         partial = self.partial_chooser
 
       log_refresh("%s Finding with heuristic '%s'" % (mode, name))
-      sql = sql.replace("%POSTFIX%", postfix)
+      sql = sql.replace("$DIFF$", f"`{self.last_diff_db}`")
+      sql = sql.replace("$MAIN$", f"`{self.db_name}`")
+      sql = sql.replace("$POSTFIX$", postfix)
 
       if self.hooks is not None:
         if 'on_launch_heuristic' in dir(self.hooks):
@@ -1522,15 +1529,15 @@ class CBinDiff:
     cur = self.db_cursor()
     
     # Same basic blocks, edges, mnemonics, etc... but different names
-    sql = """ select distinct f.address ea, f.name name1, df.name name2,
+    sql = f""" select distinct f.address ea, f.name name1, df.name name2,
                      f.names f_names, df.names df_names, df.address ea2,
                      f.nodes bb1, df.nodes bb2,
                      f.pseudocode pseudo1, df.pseudocode pseudo2,
                      f.assembly asm1, df.assembly asm2,
                      f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
-                     cast(f.md_index as real) md1, cast(df.md_index as real) md2
+                     cast(f.md_index as float) md1, cast(df.md_index as float) md2
                 from functions f,
-                     diff.functions df
+                     `{self.last_diff_db}`.functions df
                where f.nodes = df.nodes
                  and f.edges = df.edges
                  and f.mnemonics = df.mnemonics
@@ -1589,7 +1596,7 @@ class CBinDiff:
 
   def find_same_name(self, choose):
     cur = self.db_cursor()
-    sql = """select f.address ea1, f.mangled_function mangled1,
+    sql = f"""select f.address ea1, f.mangled_function mangled1,
                     d.address ea2, f.name name, d.name name2,
                     d.mangled_function mangled2,
                     f.pseudocode pseudo1, d.pseudocode pseudo2,
@@ -1597,9 +1604,9 @@ class CBinDiff:
                     f.pseudocode_primes primes1,
                     d.pseudocode_primes primes2,
                     f.nodes bb1, d.nodes bb2,
-                    cast(f.md_index as real) md1, cast(d.md_index as real) md2
+                    cast(f.md_index as float) md1, cast(d.md_index as float) md2
                from functions f,
-                    diff.functions d
+                    `{self.last_diff_db}`.functions d
               where (d.mangled_function = f.mangled_function
                  or d.name = f.name)
                 and f.name not like 'nullsub_%'"""
@@ -1667,7 +1674,7 @@ class CBinDiff:
       db_name = "diff"
 
     try:
-      sql = "select id from %s.functions where name = ?" % db_name
+      sql = "select id from %s.functions where name = %s" % db_name
       cur.execute(sql, (name,))
       row = cur.fetchone()
       if row:
@@ -1688,9 +1695,9 @@ class CBinDiff:
       desc = "Call address sequence"
       id1 = row["id1"]
       id2 = row["id2"]
-      sql = """ select * from functions where id = ? """ + postfix + """
+      sql = f""" select * from functions where id = %s """ + postfix + """
                 union all 
-                select * from diff.functions where id = ? """ + postfix
+                select * from `{self.last_diff_db}`.functions where id = %s """ + postfix
 
       thresold = min(0.6, float(item[5]))
       for j in range(0, min(10, id1 - last)):
@@ -1772,7 +1779,7 @@ class CBinDiff:
         id1 = self.get_function_id(name1)
         id2 = self.get_function_id(name2, False)
         sql = """insert into best_matches (id, id1, ea1, name1, id2, ea2, name2)
-                                   values (?, ?, ?, ?, ?, ?, ?)"""
+                                   values (%s, %s, %s, %s, %s, %s, %s)"""
         cur.execute(sql, (i, id1, str(ea1), name1, id2, str(ea2), name2))
         i += 1
 
@@ -1800,16 +1807,16 @@ class CBinDiff:
     self.find_callgraph_matches_from(partial_items, 0.80)
 
   def find_callgraph_matches_from(self, the_items, min_value):
-    sql = """select distinct f.address ea, f.name name1, df.address ea2, df.name name2,
+    sql = f"""select distinct f.address ea, f.name name1, df.address ea2, df.name name2,
                     'Callgraph match (%s)' description,
                     f.pseudocode pseudo1, df.pseudocode pseudo2,
                     f.assembly asm1, df.assembly asm2,
                     f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
                     f.nodes bb1, df.nodes bb2,
-                    cast(f.md_index as real) md1, cast(df.md_index as real) md2,
+                    cast(f.md_index as float) md1, cast(df.md_index as float) md2,
                     df.tarjan_topological_sort, df.strongly_connected_spp
                from functions f,
-                    diff.functions df
+                    `{self.last_diff_db}`.functions df
               where  f.address in (%s)
                 and df.address in (%s)
                 and  f.name not like 'nullsub_%%'
@@ -1818,8 +1825,8 @@ class CBinDiff:
                 and ((f.nodes > 5 and df.nodes > 5) 
                   or (f.instructions > 10 and df.instructions > 10))"""
 
-    main_callers_sql = """select address from main.callgraph where func_id = ? and type = ?"""
-    diff_callers_sql = """select address from diff.callgraph where func_id = ? and type = ?"""
+    main_callers_sql = """select address from callgraph where func_id = %s and type = %s"""
+    diff_callers_sql = f"""select address from `{self.last_diff_db}`.callgraph where func_id = %s and type = %s"""
 
     cur = self.db_cursor()
     dones = set()
@@ -1891,11 +1898,11 @@ class CBinDiff:
         name = row["name"]
         if name not in self.matched1:
           ea = row[1]
-          sql = "insert into unmatched(address,main) values(?,?)"
+          sql = "insert into unmatched(address,main) values(%s,%s)"
           cur.execute(sql, (ea, 1))
 
     # Find functions not matched in the secondary database
-    sql = "select name, address from diff.functions"
+    sql = f"select name, address from `{self.last_diff_db}`.functions"
     cur.execute(sql)
     rows = cur.fetchall()
     if len(rows) > 0:
@@ -1903,21 +1910,21 @@ class CBinDiff:
         name = row["name"]
         if name not in self.matched2:
           ea = row[1]
-          sql = "insert into unmatched(address,main) values(?,?)"
+          sql = "insert into unmatched(address,main) values(%s,%s)"
           cur.execute(sql, (ea, 0))
     cur.close()
 
     cur = self.db_cursor()
-    sql = """select distinct f.address ea, f.name name1, df.address ea2, df.name name2,
+    sql = f"""select distinct f.address ea, f.name name1, df.address ea2, df.name name2,
                     'Brute forcing' description,
                     f.pseudocode pseudo1, df.pseudocode pseudo2,
                     f.assembly asm1, df.assembly asm2,
                     f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
                     f.nodes bb1, df.nodes bb2,
-                    cast(f.md_index as real) md1, cast(df.md_index as real) md2,
+                    cast(f.md_index as float) md1, cast(df.md_index as float) md2,
                     df.tarjan_topological_sort, df.strongly_connected_spp
                from functions f,
-                    diff.functions df,
+                    `{self.last_diff_db}`.functions df,
                     unmatched um
               where ((f.address = um.address and um.main = 1)
                  or (df.address = um.address and um.main = 0))
@@ -1954,11 +1961,11 @@ class CBinDiff:
         name = row["name"]
 
         if name not in self.matched1:
-          ea = row[1]
+          ea = row["address"]
           choose.add_item(CChooser.Item(ea, name))
       self.unmatched_second = choose
 
-    sql = "select name, address from diff.functions"
+    sql = f"select name, address from `{self.last_diff_db}`.functions"
     cur.execute(sql)
     rows = cur.fetchall()
     if len(rows) > 0:
@@ -1982,77 +1989,84 @@ class CBinDiff:
     self.unmatched_primary = self.chooser("Unmatched in primary", self, False)
 
   def save_results(self, filename):
-    if os.path.exists(filename):
-      os.remove(filename)
-      log("Previous diff results '%s' removed." % filename)
-
-    results_db = sqlite3.connect(filename, check_same_thread=True)
-    results_db.text_factory = str
+    db_attrs = get_db_attrs()
+    results_db = mysql.connector.connect(
+      user=db_attrs["user"], password=db_attrs["password"],
+      host=db_attrs["host"]
+    )
 
     cur = results_db.cursor()
     try:
+      sql = f"create database if not exists `{filename}`"
+      cur.execute(sql)
+
+      sql = f"use `{filename}`"
+      cur.execute(sql)
+
       sql = "create table config (main_db text, diff_db text, version text, date text)"
       cur.execute(sql)
 
-      sql = "insert into config values (?, ?, ?, ?)"
+      sql = "insert into config values (%s, %s, %s, %s)"
       cur.execute(sql, (self.db_name, self.last_diff_db, VERSION_VALUE, time.asctime()))
 
-      sql = "create table results (type, line, address, name, address2, name2, ratio, bb1, bb2, description)"
+      sql = """create table results 
+        (type text, line text, address text, name text,
+        address2 text, name2 text, ratio float, bb1 text,
+        bb2 text, description text)
+      """
       cur.execute(sql)
 
       sql = "create unique index uq_results on results(address, address2)"
       cur.execute(sql)
 
-      sql = "create table unmatched (type, line, address, name)"
+      sql = "create table unmatched (type text, line text, address text, name text)"
       cur.execute(sql)
 
-      with results_db:
-        results_sql   = "insert or ignore into results values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        unmatched_sql = "insert into unmatched values (?, ?, ?, ?)"
+      results_sql   = "insert into results values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+      unmatched_sql = "insert into unmatched values (%s, %s, %s, %s)"
 
-        for item in self.best_chooser.items:
-          l = list(item)
-          l.insert(0, 'best')
-          cur.execute(results_sql, l)
+      for item in self.best_chooser.items:
+        l = list(item)
+        l.insert(0, 'best')
+        cur.execute(results_sql, l)
 
-        for item in self.partial_chooser.items:
-          l = list(item)
-          l.insert(0, 'partial')
-          cur.execute(results_sql, l)
+      for item in self.partial_chooser.items:
+        l = list(item)
+        l.insert(0, 'partial')
+        cur.execute(results_sql, l)
 
-        for item in self.unreliable_chooser.items:
-          l = list(item)
-          l.insert(0, 'unreliable')
-          cur.execute(results_sql, l)
+      for item in self.unreliable_chooser.items:
+        l = list(item)
+        l.insert(0, 'unreliable')
+        cur.execute(results_sql, l)
 
-        for item in self.unmatched_primary.items:
-          l = list(item)
-          l.insert(0, 'primary')
-          cur.execute(unmatched_sql, l)
+      for item in self.unmatched_primary.items:
+        l = list(item)
+        l.insert(0, 'primary')
+        cur.execute(unmatched_sql, l)
 
-        for item in self.unmatched_second.items:
-          l = list(item)
-          l.insert(0, 'secondary')
-          cur.execute(unmatched_sql, l)
+      for item in self.unmatched_second.items:
+        l = list(item)
+        l.insert(0, 'secondary')
+        cur.execute(unmatched_sql, l)
 
-      log("Diffing results saved in file '%s'." % filename)
+      log("Diffing results saved in DB '%s'." % filename)
     finally:
+      results_db.commit()
       cur.close()
       results_db.close()
 
   def try_attach(self, cur, db):
-    try:
-      cur.execute('attach "%s" as diff' % db)
-    except:
-      pass
+    return None
 
   def diff(self, db):
     self.last_diff_db = db
     cur = self.db_cursor()
-    self.try_attach(cur, db)
+    #self.try_attach(cur, db)
+    cur.execute(f"use `{self.db_name}`")
 
     try:
-      cur.execute("select value from diff.version")
+      cur.execute(f"select value from `{self.last_diff_db}`.version")
     except:
       log("Error: %s " % sys.exc_info()[1])
       log("The selected file does not look like a valid Diaphora exported database!")
@@ -2141,23 +2155,20 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("db1")
     parser.add_argument("db2")
-    parser.add_argument("-o", "--outfile", help="Write output to <outfile>")
+    parser.add_argument("outfile")
     args = parser.parse_args()
     db1 = args.db1
     db2 = args.db2
-    if args.outfile:
-      diff_out = args.outfile
-    else:
-      diff_out = "{}_vs_{}.diaphora".format(
-              os.path.basename(os.path.splitext(db1)[0]),
-              os.path.basename(os.path.splitext(db2)[0]))
+    diff_out = args.outfile
 
   if do_diff:
     bd = CBinDiff(db1)
     if not is_ida:
       bd.ignore_all_names = False
-    bd.db = sqlite3.connect(db1, check_same_thread=True)
-    bd.db.text_factory = str
-    bd.db.row_factory = sqlite3.Row
+    db_attrs = get_db_attrs()
+    bd.db = mysql.connector.connect(
+      user=db_attrs["user"], password=db_attrs["password"],
+      host=db_attrs["host"], database=db1
+    )
     bd.diff(db2)
     bd.save_results(diff_out)
