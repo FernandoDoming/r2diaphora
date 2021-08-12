@@ -1,8 +1,8 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 
 """
 Diaphora, a diffing plugin for IDA
-Copyright (c) 2015-2019, Joxean Koret
+Copyright (c) 2015-2021, Joxean Koret
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as
@@ -119,7 +119,7 @@ HEURISTICS.append({
                      $DIFF$.functions df
                where f.bytes_hash = df.bytes_hash
                  and f.names = df.names
-                 and f.names != '{}'
+                 and f.names != '[]'
                  and f.instructions > 5 and df.instructions > 5""",
   "flags":HEUR_FLAG_NONE
 })
@@ -199,11 +199,33 @@ HEURISTICS.append({
 })
 
 HEURISTICS.append({
+  "name":"Same address and mnemonics",
+  "category":"Best",
+  "ratio":HEUR_TYPE_RATIO,
+  "sql":""" select distinct f.address ea, f.name name1, df.address ea2, df.name name2,
+                   'Same address and mnemonics' description,
+                   f.pseudocode pseudo1, df.pseudocode pseudo2,
+                   f.assembly asm1, df.assembly asm2,
+                   f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
+                   f.nodes bb1, df.nodes bb2,
+                   cast(f.md_index as real) md1, cast(df.md_index as real) md2
+              from functions f,
+                   diff.functions df
+             where df.address = f.address
+               and df.mnemonics = f.mnemonics
+               and df.instructions = f.instructions
+               and df.instructions > 5
+               and ((f.name = df.name and substr(f.name, 1, 4) != 'sub_')
+                 or (substr(f.name, 1, 4) = 'sub_' or substr(df.name, 1, 4)))""",
+  "flags":HEUR_FLAG_NONE
+})
+
+HEURISTICS.append({
   "name":"Same cleaned up assembly",
   "category":"Best",
   "ratio":HEUR_TYPE_RATIO,
   "sql":""" select distinct f.address ea, f.name name1, df.address ea2, df.name name2,
-             'Same cleaned up assembly or pseudo-code' description,
+             'Same cleaned up assembly' description,
              f.pseudocode pseudo1, df.pseudocode pseudo2,
              f.assembly asm1, df.assembly asm2,
              f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
@@ -223,7 +245,7 @@ HEURISTICS.append({
   "category":"Best",
   "ratio":HEUR_TYPE_RATIO,
   "sql":""" select distinct f.address ea, f.name name1, df.address ea2, df.name name2,
-             'Same cleaned up assembly or pseudo-code' description,
+             'Same cleaned pseudo-code' description,
              f.pseudocode pseudo1, df.pseudocode pseudo2,
              f.assembly asm1, df.assembly asm2,
              f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
@@ -256,6 +278,25 @@ HEURISTICS.append({
         and f.edges = df.edges
         and f.mnemonics = df.mnemonics
         and f.nodes > 1""",
+  "flags":HEUR_FLAG_NONE
+})
+
+HEURISTICS.append({
+  "name":"Same RVA",
+  "category":"Best",
+  "ratio":HEUR_TYPE_RATIO_MAX,
+  "sql":""" select distinct f.address ea, f.name name1, df.address ea2, df.name name2,
+                   'Equal RVA' description,
+                   f.pseudocode pseudo1, df.pseudocode pseudo2,
+                   f.assembly asm1, df.assembly asm2,
+                   f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
+                   f.nodes bb1, df.nodes bb2,
+                   cast(f.md_index as real) md1, cast(df.md_index as real) md2
+              from functions f,
+                   diff.functions df
+             where df.rva = f.rva
+               %POSTFIX%""",
+  "min":0.7,
   "flags":HEUR_FLAG_NONE
 })
 
@@ -400,7 +441,9 @@ HEURISTICS.append({
             $DIFF$.functions df
       where mc.constant = dc.constant
         and  f.id = mc.func_id
-        and df.id = dc.func_id""",
+        and df.id = dc.func_id
+        and f.nodes > 3 and df.nodes > 3
+        and f.constants_count > 0""",
   "min":0.2,
   "flags":HEUR_FLAG_NONE
 })
@@ -503,7 +546,7 @@ HEURISTICS.append({
        from functions f,
             $DIFF$.functions df
       where f.switches = df.switches
-        and df.switches != '{}'
+        and df.switches != '[]'
         and f.nodes > 5 and df.nodes > 5
         $POSTFIX$""",
   "min": 0.5,
@@ -547,7 +590,7 @@ HEURISTICS.append({
         from functions f,
              $DIFF$.functions df
        where f.names = df.names
-         and f.names != '{}'
+         and f.names != '[]'
          and f.md_index = df.md_index
          and f.instructions = df.instructions
          and f.nodes > 5 and df.nodes > 5 $POSTFIX$""",
@@ -577,7 +620,7 @@ HEURISTICS.append({
                  and f.outdegree = df.outdegree
                  and f.nodes > 3
                  and f.edges > 3
-                 and f.names != '{}'
+                 and f.names != '[]'
                  $POSTFIX$
                union
               select f.address ea, f.name name1, df.address ea2, df.name name2,
@@ -593,7 +636,7 @@ HEURISTICS.append({
                  and f.edges = df.edges
                  and f.mnemonics = df.mnemonics
                  and f.names = df.names
-                 and f.names != '{}'
+                 and f.names != '[]'
                  and f.cyclomatic_complexity = df.cyclomatic_complexity
                  and f.prototype2 = df.prototype2
                  $POSTFIX$""",
@@ -616,7 +659,7 @@ HEURISTICS.append({
        where f.mnemonics = df.mnemonics
          and f.instructions = df.instructions
          and f.names = df.names
-         and f.names != '{}'
+         and f.names != '[]'
          and f.instructions > 5 and df.instructions > 5
          $POSTFIX$""",
   "flags":HEUR_FLAG_NONE
@@ -686,6 +729,8 @@ HEURISTICS.append({
        from functions f,
             $DIFF$.functions df
       where df.pseudocode_hash1 = f.pseudocode_hash1
+        and df.pseudocode_hash2 = f.pseudocode_hash2
+        and df.pseudocode_hash3 = f.pseudocode_hash3
         and f.instructions > 5
         and df.instructions > 5 """,
   "flags":HEUR_FLAG_NONE
@@ -705,12 +750,12 @@ HEURISTICS.append({
             $DIFF$.functions df
       where f.pseudocode_lines = df.pseudocode_lines
         and f.names = df.names
-        and df.names != '{}'
+        and df.names != '[]'
         and df.pseudocode_lines > 5
         and df.pseudocode is not null 
         and f.pseudocode is not null
         $POSTFIX$""",
-  "flags":HEUR_FLAG_UNRELIABLE
+  "flags":HEUR_FLAG_NONE
 })
 
 HEURISTICS.append({
@@ -962,7 +1007,7 @@ HEURISTICS.append({
           and f.cyclomatic_complexity = df.cyclomatic_complexity
           and f.cyclomatic_complexity < 20
           and f.prototype2 = df.prototype2
-          and df.names != '{}'
+          and df.names != '[]'
           $POSTFIX$""",
   "min":0.5,
   "flags":HEUR_FLAG_NONE
@@ -983,7 +1028,7 @@ HEURISTICS.append({
       where f.names = df.names
         and f.cyclomatic_complexity = df.cyclomatic_complexity
         and f.cyclomatic_complexity < 15
-        and df.names != '{}'
+        and df.names != '[]'
         $POSTFIX$""",
   "min":0.5,
   "flags":HEUR_FLAG_NONE
@@ -1064,7 +1109,7 @@ HEURISTICS.append({
         from functions f,
              $DIFF$.functions df
        where f.names = df.names
-         and f.names != '{}'
+         and f.names != '[]'
          and f.strongly_connected_spp = df.strongly_connected_spp
          and f.strongly_connected_spp > 0
          and f.nodes > 5 and df.nodes > 5 """,
@@ -1274,7 +1319,7 @@ def check_dupes():
   import pprint
   pprint.pprint(dups)
   
-  assert(dups == [['Similar small pseudo-code', 2], ['Loop count', 2]])
+  assert(sorted(dups) == sorted([['Similar small pseudo-code', 2], ['Loop count', 2]]) )
   
 #-------------------------------------------------------------------------------
 def check_heuristic_in_sql():
@@ -1314,7 +1359,7 @@ def check_heuristics_ratio():
   import pprint
   pprint.pprint(ratios)
   
-  assert(ratios == Counter({1: 28, 2: 14, 0: 7}))
+  assert(ratios == Counter({1: 29, 2: 18, 0: 7}))
 
 #-------------------------------------------------------------------------------
 def check_mandatory_fields():

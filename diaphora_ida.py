@@ -1,6 +1,6 @@
 """
 Diaphora, a diffing plugin for IDA
-Copyright (c) 2015-2020, Joxean Koret
+Copyright (c) 2015-2021, Joxean Koret
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as
@@ -42,6 +42,8 @@ from jkutils.graph_hashes import CKoretKaramitasHash
 from idc import *
 from idaapi import *
 from idautils import *
+
+import idaapi
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 
@@ -107,6 +109,15 @@ def save_results():
     filename = ask_file(1, "*.diaphora", "Select the file to store diffing results")
     if filename is not None:
       g_bindiff.save_results(filename)
+
+#-------------------------------------------------------------------------------
+def load_and_import_all_results(filename, main_db, diff_db):
+  tmp_diff = CIDABinDiff(":memory:")
+
+  if(os.path.exists(filename) and os.path.exists(main_db) and os.path.exists(diff_db)):
+    tmp_diff.load_and_import_all_results(filename, main_db, diff_db)
+
+  idaapi.qexit(0)
 
 #-------------------------------------------------------------------------------
 def load_results():
@@ -250,7 +261,7 @@ class CIDAChooser(CDiaphoraChooser):
     return len(self.items)
 
   def OnDeleteLine(self, items):
-    for n in items:
+    for n in sorted(items, reverse=True):
       if n >= 0:
         name1 = self.items[n][2]
         name2 = self.items[n][4]
@@ -434,7 +445,7 @@ class CBinDiffExporterSetup(Form):
   If no SQLite diff database is selected, it will just export the current IDA database to SQLite format. Leave the 2nd field empty if you are
   exporting the first database.
 
-  SQLite databases:                                                                                                                                                     Export filter limits:
+  SQLite databases:                                                                                                                                     Export filter limits:
   <#Select a file to export the current IDA database to SQLite format#Export IDA database to SQLite  :{iFileSave}> <#Minimum address to find functions to export#From address:{iMinEA}>
   <#Select the SQLite database to diff against                       #SQLite database to diff against:{iFileOpen}> <#Maximum address to find functions to export#To address  :{iMaxEA}>
 
@@ -455,8 +466,8 @@ class CBinDiffExporterSetup(Form):
 
   NOTE: Don't select IDA database files (.IDB, .I64) as only SQLite databases are considered.
 """
-    args = {'iFileSave': Form.FileInput(save=True, swidth=40),
-            'iFileOpen': Form.FileInput(open=True, swidth=40),
+    args = {'iFileSave': Form.FileInput(save=True, swidth=40, hlp="SQLite database (*.sqlite)"),
+            'iFileOpen': Form.FileInput(open=True, swidth=40, hlp="SQLite database (*.sqlite)"),
             'iMinEA':    Form.NumericInput(tp=Form.FT_HEX, swidth=22),
             'iMaxEA':    Form.NumericInput(tp=Form.FT_HEX, swidth=22),
             'cGroup1'  : Form.ChkGroupControl(("rUseDecompiler",
@@ -470,7 +481,7 @@ class CBinDiffExporterSetup(Form):
                                                "rIgnoreSubNames",
                                                "rIgnoreAllNames",
                                                "rIgnoreSmallFunctions")),
-            'iProjectSpecificRules' : Form.FileInput(open=True)}
+            'iProjectSpecificRules' : Form.FileInput(open=True, hlp="Python scripts (*.py)")}
 
     Form.__init__(self, s, args)
 
@@ -746,7 +757,7 @@ class CIDABinDiff(diaphora.CBinDiff):
     callgraph_all_primes = {}
     func_list = list(Functions(self.min_ea, self.max_ea))
     total_funcs = len(func_list)
-    t = time.time()
+    t = time.monotonic()
 
     if crashed_before:
       start_func = self.get_last_crash_func()
@@ -768,7 +779,7 @@ class CIDABinDiff(diaphora.CBinDiff):
       i += 1
       if (total_funcs >= 100) and i % (int(total_funcs/100)) == 0 or i == 1:
         line = "Exported %d function(s) out of %d total.\nElapsed %d:%02d:%02d second(s), remaining time ~%d:%02d:%02d"
-        elapsed = time.time() - t
+        elapsed = time.monotonic() - t
         remaining = (elapsed / i) * (total_funcs - i)
 
         m, s = divmod(remaining, 60)
@@ -817,7 +828,6 @@ class CIDABinDiff(diaphora.CBinDiff):
 
   def export(self):
     if self.project_script is not None:
-      log("Loading project specific Python script...")
       if not self.load_hooks():
         return False
 
@@ -1070,14 +1080,13 @@ class CIDABinDiff(diaphora.CBinDiff):
 
       if buf1 == buf2:
         warning("Both pseudo-codes are equal.")
-        return
 
       fmt = HtmlFormatter()
       fmt.noclasses = True
       fmt.linenos = False
       fmt.nobackground = True
       if not html:
-        uni_diff = difflib.unified_diff(buf1.split("\n"), buf2.split("\n"))
+        uni_diff = difflib.unified_diff(buf2.split("\n"), buf1.split("\n"))
         tmp = []
         for line in uni_diff:
           tmp.append(line.strip("\n"))
@@ -1086,9 +1095,9 @@ class CIDABinDiff(diaphora.CBinDiff):
         
         src = highlight(buf, DiffLexer(), fmt)
       else:
-        src = html_diff.make_file(buf1.split("\n"), buf2.split("\n"), fmt, CppLexer())
+        src = html_diff.make_file(buf2.split("\n"), buf1.split("\n"), fmt, CppLexer())
 
-      title = "Diff pseudo-code %s - %s" % (row1["name"], row2["name"])
+      title = "Diff pseudo-code %s - %s" % (row2["name"], row1["name"])
       cdiffer = CHtmlViewer()
       cdiffer.Show(src, title)
 
@@ -1187,7 +1196,7 @@ class CIDABinDiff(diaphora.CBinDiff):
       return True
 
     # Has a name
-    if import_syms[ea][2] is not None:
+    if import_syms[ea][3] is not None:
       return True
 
     # Has pseudocode comment
@@ -1276,9 +1285,10 @@ class CIDABinDiff(diaphora.CBinDiff):
               if changed or is_importable:
                 ea1 = str(ea1)
                 ea2 = str(ea2)
+                if ea1 in matched_syms and ea2 in import_syms:
+                  self.import_instruction(matched_syms[ea1], import_syms[ea2])
                 if ea2 in matched_syms and ea1 in import_syms:
                   self.import_instruction(matched_syms[ea2], import_syms[ea1])
-
     finally:
       cur.close()
 
@@ -1407,7 +1417,7 @@ class CIDABinDiff(diaphora.CBinDiff):
     return decompile(f)
 
   def decompile_and_get(self, ea):
-    if not self.decompiler_available:
+    if not self.decompiler_available or is_spec_ea(ea):
       return False
 
     decompiler_plugin = os.getenv("DIAPHORA_DECOMPILER_PLUGIN")
@@ -1537,9 +1547,10 @@ or selecting Edit -> Plugins -> Diaphora - Show results""")
       name = demangle_named_name
 
     if self.hooks is not None:
-      ret = self.hooks.before_export_function(f, name)
-      if not ret:
-        return ret
+      if 'before_export_function' in dir(self.hooks):
+        ret = self.hooks.before_export_function(f, name)
+        if not ret:
+          return False
 
     f = int(f)
     func = get_func(f)
@@ -1899,9 +1910,10 @@ or selecting Edit -> Plugins -> Diaphora - Show results""")
              basic_blocks_data, bb_relations)
 
     if self.hooks is not None:
-      d = self.create_function_dictionary(l)
-      d = self.hooks.after_export_function(d)
-      l = self.get_function_from_dictionary(d)
+      if 'after_export_function' in dir(self.hooks):
+        d = self.create_function_dictionary(l)
+        d = self.hooks.after_export_function(d)
+        l = self.get_function_from_dictionary(d)
 
     return l
 
@@ -1949,11 +1961,11 @@ or selecting Edit -> Plugins -> Diaphora - Show results""")
       d["seg_rva"],
       d["assembly_addrs"],
       d["kgh_hash"],
+      d["userdata"],
       d["callers"],
       d["callees"],
       d["basic_blocks_data"],
-      d["bb_relations"],
-      d["userdata"])
+      d["bb_relations"])
     return l
 
   def create_function_dictionary(self, l):
@@ -2093,6 +2105,77 @@ or selecting Edit -> Plugins -> Diaphora - Show results""")
     if til_names is not None:
       for til in til_names:
         self.add_program_data("til", til, None)
+
+
+  def load_and_import_all_results(self, filename, main_db, diff_db):
+    results_db = sqlite3.connect(filename, check_same_thread=False)
+    results_db.text_factory = str
+    results_db.row_factory = sqlite3.Row
+
+    cur = results_db.cursor()
+    try:
+      sql = "select main_db, diff_db, version from config"
+      cur.execute(sql)
+      rows = cur.fetchall()
+      if len(rows) != 1:
+        Warning("Malformed results database!")
+        return False
+
+      row = rows[0]
+      version = row["version"]
+      if version != diaphora.VERSION_VALUE:
+        msg = "The version of the diff results is %s and current version is %s, there can be some incompatibilities."
+        Warning(msg % (version, diaphora.VERSION_VALUE))
+
+      self.reinit(main_db, diff_db)
+
+      min_ratio = float(self.get_value_for("MINIMUM_IMPORT_RATIO", 0.5))
+      log("Minimum import threshold %f" % min_ratio)
+
+      sql = "select * from results"
+      cur.execute(sql)
+      for row in diaphora.result_iter(cur):
+        if row["type"] == "best":
+          choose = self.best_chooser
+        elif row["type"] == "partial":
+          choose = self.partial_chooser
+        else:
+          choose = self.unreliable_chooser
+
+        ea1 = int(row["address"], 16)
+        name1 = row["name"]
+        ea2 = int(row["address2"], 16)
+        name2 = row["name2"]
+        desc = row["description"]
+        ratio = float(row["ratio"])
+
+        if ratio < min_ratio:
+          log("Match %s-%s is excluded" % (name1, name2))
+          continue
+
+        bb1 = int(row["bb1"])
+        bb2 = int(row["bb2"])
+
+        choose.add_item(diaphora.CChooser.Item(ea1, name1, ea2, name2, desc, ratio, bb1, bb2))
+
+      sql = "select * from unmatched"
+      cur.execute(sql)
+      for row in diaphora.result_iter(cur):
+        if row["type"] == "primary":
+          choose = self.unmatched_primary
+        else:
+          choose = self.unmatched_second
+        choose.add_item(diaphora.CChooser.Item(int(row["address"], 16), row["name"]))
+
+      self.import_all_auto(self.best_chooser.items)
+      self.import_all_auto(self.partial_chooser.items)
+
+      return True
+    finally:
+      cur.close()
+      results_db.close()
+
+    return False
 
   def load_results(self, filename):
     results_db = sqlite3.connect(filename, check_same_thread=False)
@@ -2254,7 +2337,7 @@ def _diff_or_export(use_ui, **options):
         if os.path.exists(crash_file):
           os.remove(crash_file)
 
-  t0 = time.time()
+  t0 = time.monotonic()
   try:
     bd = CIDABinDiff(opts.file_out)
     bd.use_decompiler_always = opts.use_decompiler
@@ -2292,7 +2375,7 @@ def _diff_or_export(use_ui, **options):
           os.remove("%s-crash" % opts.file_out)
 
       if exported:
-        log("Database exported. Took {} seconds.".format(time.time() - t0))
+        log("Database exported. Took {} seconds.".format(time.monotonic() - t0))
         hide_wait_box()
 
     if opts.file_in != "":
@@ -2533,6 +2616,11 @@ def main():
     bd.ida_subs = bd.get_value_for("ida_subs", bd.ida_subs)
     bd.ignore_sub_names = bd.get_value_for("ignore_sub_names", bd.ignore_sub_names)
     bd.function_summaries_only = bd.get_value_for("function_summaries_only", bd.function_summaries_only)
+    bd.min_ea = int(bd.get_value_for("from_address", "0"), 16)
+
+    to_ea = bd.get_value_for("to_address", None)
+    if to_ea is not None:
+      bd.max_ea = int(to_ea, 16)
 
     try:
       bd.export()
