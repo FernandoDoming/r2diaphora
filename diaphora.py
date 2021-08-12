@@ -27,6 +27,7 @@ import decimal
 import mysql.connector
 import logging
 import threading
+import argparse
 
 from threading import Thread
 from io import StringIO
@@ -38,12 +39,6 @@ from diaphora_heuristics import *
 from jkutils.kfuzzy import CKoretFuzzyHashing
 from jkutils.factor import (FACTORS_CACHE, difference, difference_ratio,
                             primesbelow as primes)
-
-try:
-  import idaapi
-  is_ida = True
-except ImportError:
-  is_ida = False
 
 _log = logging.getLogger("diaphora")
 _log.setLevel(logging.DEBUG)
@@ -1146,8 +1141,6 @@ class CBinDiff:
           else:
             log_refresh("[Parallel] %d thread(s) running, waiting for at least one to finish..." % len(threads_list), do_log=False)
             t.join(0.1)
-            if is_ida:
-              self.refresh()
 
     if len(threads_list) > 0:
       log_refresh("[Parallel] Waiting for remaining %d thread(s) to finish..." % len(threads_list), do_log=False)
@@ -2164,44 +2157,21 @@ if __name__ == "__main__":
     log("WARNING: You are using Python 2 instead of Python 3. The main branch of Diaphora works exclusively with Python 3.")
     log("TIP: There are other branches that contain backward compatability.")
 
-  do_diff = True
-  if os.getenv("DIAPHORA_AUTO_DIFF") is not None:
-    db1 = os.getenv("DIAPHORA_DB1")
-    if db1 is None:
-      raise Exception("No database file specified!")
+  parser = argparse.ArgumentParser()
+  parser.add_argument("db1")
+  parser.add_argument("db2")
+  parser.add_argument("outfile")
+  args = parser.parse_args()
+  db1 = args.db1
+  db2 = args.db2
+  diff_out = args.outfile
 
-    db2 = os.getenv("DIAPHORA_DB2")
-    if db2 is None:
-      raise Exception("No database file to diff against specified!")
-
-    diff_out = os.getenv("DIAPHORA_DIFF_OUT")
-    if diff_out is None:
-      raise Exception("No output file for diff specified!")
-  elif is_ida:
-    diaphora_dir = os.path.dirname(__file__)
-    script = os.path.join(diaphora_dir, "diaphora_ida.py")
-    exec(compile(open(script, "rb").read(), script, 'exec'))
-    do_diff = False
-  else:
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("db1")
-    parser.add_argument("db2")
-    parser.add_argument("outfile")
-    args = parser.parse_args()
-    db1 = args.db1
-    db2 = args.db2
-    diff_out = args.outfile
-
-  if do_diff:
-    bd = CBinDiff(db1)
-    if not is_ida:
-      bd.ignore_all_names = False
-    db_attrs = get_db_attrs()
-    bd.db = mysql.connector.connect(
-      user=db_attrs["user"], password=db_attrs["password"],
-      host=db_attrs["host"], database=db1
-    )
-    bd.diff(db2)
-    bd.save_results(diff_out)
+  bd = CBinDiff(db1)
+  bd.ignore_all_names = False
+  db_attrs = get_db_attrs()
+  bd.db = mysql.connector.connect(
+    user=db_attrs["user"], password=db_attrs["password"],
+    host=db_attrs["host"], database=db1
+  )
+  bd.diff(db2)
+  bd.save_results(diff_out)
