@@ -295,10 +295,7 @@ class CBinDiff:
     if isinstance(threading.current_thread(), threading._MainThread):
       self.db = db
       self.create_schema()
-      try:
-        db.execute("analyze")
-      except:
-        pass
+      self.db.commit()
 
   def get_db(self):
     tid = threading.current_thread().ident
@@ -323,23 +320,23 @@ class CBinDiff:
   def create_schema(self):
     cur = self.db_cursor()
 
-    sql = f""" create database if not exists `%s` """
-    cur.execute(sql, (self.db_name))
+    sql = f"""create database if not exists `{self.db_name}`"""
+    cur.execute(sql)
 
-    sql = f""" use `%s` """
-    cur.execute(sql, (self.db_name))
+    sql = f"""use `{self.db_name}`"""
+    cur.execute(sql)
 
     sql = """ create table if not exists functions (
                         id integer primary key auto_increment,
-                        name varchar(255),
-                        address text unique,
+                        name text,
+                        address text,
                         nodes integer,
                         edges integer,
                         indegree integer,
                         outdegree integer,
                         size integer,
                         instructions integer,
-                        mnemonics text,
+                        mnemonics mediumtext,
                         names text,
                         prototype text,
                         cyclomatic_complexity integer,
@@ -358,7 +355,7 @@ class CBinDiff:
                         pseudocode_hash3 text,
                         strongly_connected integer,
                         loops integer,
-                        rva text unique,
+                        rva text,
                         tarjan_topological_sort text,
                         strongly_connected_spp text,
                         clean_assembly mediumtext,
@@ -398,7 +395,7 @@ class CBinDiff:
 
     sql = """ create table if not exists instructions (
                 id integer primary key auto_increment,
-                address text unique,
+                address text,
                 disasm text,
                 mnemonic text,
                 comment1 text,
@@ -412,7 +409,7 @@ class CBinDiff:
     sql = """ create table if not exists basic_blocks (
                 id integer primary key auto_increment,
                 num integer,
-                address text unique)"""
+                address text)"""
     cur.execute(sql)
 
     sql = """ create table if not exists bb_relations (
@@ -455,7 +452,7 @@ class CBinDiff:
 
   def create_indexes(self):
     cur = self.db_cursor()
-    
+
     sql = "create index if not exists idx_assembly on functions(assembly)"
     cur.execute(sql)
 
@@ -568,9 +565,6 @@ class CBinDiff:
     cur.execute(sql)
 
     sql = "create index if not exists idx_constants on constants (constant)"
-    cur.execute(sql)
-
-    sql = "analyze"
     cur.execute(sql)
 
     cur.close()

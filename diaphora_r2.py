@@ -1638,12 +1638,14 @@ class CIDABinDiff(diaphora.CBinDiff):
         return are_equal
 
 #-----------------------------------------------------------------------
-def _diff_or_export(function_filter = None, userdata = "", **options):
+def _diff_or_export(function_filter = None, dbname = None, userdata = "", **options):
     global g_bindiff
 
     total_functions = len(list(Functions(function_filter)))
     options["function_filter"] = function_filter
     opts = BinDiffOptions(**options)
+    if dbname:
+        opts.file_out = dbname
     bd = None
 
     try:
@@ -1846,7 +1848,7 @@ def _gen_diaphora_db(
     if not r2:
         _r2_open(input_path)
 
-    _diff_or_export(function_filter, file_out=out_db)
+    _diff_or_export(function_filter, dbname=out_db)
     if r2:
         _r2_close()
 
@@ -1861,7 +1863,7 @@ def _r2_open(input_path):
     r2.cmd("e asm.bytes=false")
     r2.cmd("e scr.color=false")
     r2.cmd("e io.cache=true")
-    r2.cmd("aeim")
+    #r2.cmd("aeim")
     r2.cmd("e anal.hasnext=true")
 
 def _r2_close():
