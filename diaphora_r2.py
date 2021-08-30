@@ -29,6 +29,7 @@ import difflib
 import traceback
 import threading
 import logging
+from logging.handlers import RotatingFileHandler
 import r2pipe
 from hashlib import md5, sha256
 
@@ -50,9 +51,22 @@ from jkutils.factor import primesbelow as primes
 #from diaphora.jkutils.graph_hashes import CKoretKaramitasHash
 
 LOG_FORMAT = "%(asctime)-15s [%(levelname)s] - %(message)s"
-logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 log = logging.getLogger("diaphora.r2")
-log.setLevel(logging.INFO)
+log.setLevel(logging.DEBUG)
+
+console = logging.StreamHandler()
+console.setLevel(logging.INFO)
+formatter = logging.Formatter(LOG_FORMAT)
+console.setFormatter(formatter)
+log.addHandler(console)
+
+if os.getenv("MODE") == "DEBUG":
+    print("[*] Running in DEBUG mode")
+    fh = RotatingFileHandler("diaphora_debug.log", maxBytes=1073741824, backupCount=5)      # 1GB
+    fh.setLevel(logging.DEBUG)
+    formatter = logging.Formatter(LOG_FORMAT)
+    fh.setFormatter(formatter)
+    log.addHandler(fh)
 
 # Messages
 MSG_RELAXED_RATIO_ENABLED = """AUTOHIDE DATABASE\n<b>Relaxed ratio calculations</b> will be enabled. It will ignore many small
@@ -78,7 +92,7 @@ r2 = None
 #-----------------------------------------------------------------------
 def cdquit(fn_name):
     # print to stderr, unbuffered in Python 2.
-    print('Timeout: {0} took too long'.format(fn_name), file=sys.stderr)
+    print('[-] Timeout: {0} took too long'.format(fn_name), file=sys.stderr)
     sys.stderr.flush() # Python 3 stderr is likely buffered.
     thread.interrupt_main() # raises KeyboardInterrupt
     
@@ -101,12 +115,16 @@ def timeout(s):
 
 #-----------------------------------------------------------------------
 def log_exec_r2_cmdj(cmd):
-    log.debug(f"R2 CMD: {cmd}")
-    return r2.cmdj(cmd)
+    s = time.time()
+    r = r2.cmdj(cmd)
+    log.debug(f"R2 CMDJ: {cmd}: {time.time() - s}s")
+    return r
 
 def log_exec_r2_cmd(cmd):
-    log.debug(f"R2 CMDJ: {cmd}")
-    return r2.cmd(cmd)
+    s = time.time()
+    r = r2.cmd(cmd)
+    log.debug(f"R2 CMD: {cmd}: {time.time() - s}s")
+    return r
 
 #-----------------------------------------------------------------------
 def block_succs(addr):
@@ -114,7 +132,7 @@ def block_succs(addr):
     try:
         bb = log_exec_r2_cmdj("afbj. @ %s" % (addr))
     except:
-        print("NO BASIC BLOCK AT %s"%(addr))
+        log.error("NO BASIC BLOCK AT %s"%(addr))
         return res
     bb = bb[0]
     try:
@@ -132,10 +150,10 @@ def block_preds(addr):
     try:
         bbs = log_exec_r2_cmdj("afbj @ %s"%(addr))
     except:
-        print("NO BASIC BLOCKS FOR %s"%(addr))
+        log.error("NO BASIC BLOCKS FOR %s"%(addr))
         return res
     if not bbs:
-        print("EMPTY BB LIST FOR %s"%(addr))
+        log.warn("EMPTY BB LIST FOR %s"%(addr))
         return res
     for bb in bbs:
         try:
@@ -164,7 +182,7 @@ def int16(x):
         return int(x, 16)
     except:
         if x != "":
-            print("ERROR converting %s"%(x))
+            log.error("ERROR converting %s"%(x))
         return 0
 
 def GetLocalTypeName(x):
@@ -654,7 +672,6 @@ class CIDABinDiff(diaphora.CBinDiff):
         ea2 = str(int(item[3], 16))
         self.do_import_one(ea1, ea2, True)
 
-        print("IMPORT ONE")
         new_func = self.read_function(str(ea1))
         self.delete_function(ea1)
         self.save_function(new_func)
@@ -1131,6 +1148,8 @@ class CIDABinDiff(diaphora.CBinDiff):
         cpu_ins_list.sort()
 
         image_base = self.get_base_address()
+        s = time.time()
+        log.debug(f"Fn {name} - Starting block iteration")
         for block in flow:
             nodes += 1
             block_startEA = +block['addr'];
@@ -1185,9 +1204,9 @@ class CIDABinDiff(diaphora.CBinDiff):
                         drefs = list(DataRefsFrom(x))
                         if len(drefs) > 0:
                             for dref in drefs:
-                                if get_func(dref) is None:
+                                if get_func(dref.get("from")) is None:
                                     str_constant = GetString(dref, -1, -1)
-                                    if str_constant is not None:
+                                    if str_constant is not None and "value" in oper:
                                         constants.append(oper["value"])
 
                 curr_bytes = GetManyBytes(x, decoded_size, False)
@@ -1287,7 +1306,9 @@ class CIDABinDiff(diaphora.CBinDiff):
             for succ_block in block_succs(block_startEA):
                 succ_base = block_startEA - image_base
                 bb_topological[bb_topo_num[block_ea]].append(bb_topo_num[succ_base])
+        log.debug(f"Fn {name} - Block iteration: {time.time() - s}s")
 
+        s = time.time()
         strongly_connected_spp = 0
         try:
             strongly_connected = strongly_connected_components(bb_relations)
@@ -1332,6 +1353,7 @@ class CIDABinDiff(diaphora.CBinDiff):
                 log.exception("")
                 pass
         asm = "\n".join(asm)
+        log.debug(f"Fn {name} - Topological analysis: {time.time() - s}s")
 
         cc = edges - nodes + 2
         proto = self.guess_type(f)
@@ -1396,6 +1418,7 @@ class CIDABinDiff(diaphora.CBinDiff):
         x = f
         seg_rva = x - SegStart(x)
         rva = f - self.get_base_address()
+        log.debug(f"Fn {name} - Decompiler: {time.time() - s}s")
 
         #kgh = CKoretKaramitasHash()
         #kgh_hash = kgh.calculate(f)
@@ -1854,7 +1877,8 @@ def _gen_diaphora_db(
 
 def _r2_open(input_path):
     global r2
-    r2 = r2pipe.open(input_path, flags=["-2"])
+    r2 = r2pipe.open(f"ccall://{input_path}", flags=["-2", "-q"])
+    r2.use_cache = True
     r2.cmd("aaaa")
     #r2.cmd("aac")
 
