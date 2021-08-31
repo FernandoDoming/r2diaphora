@@ -21,6 +21,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
 import os
+from subprocess import TimeoutExpired
 import sys
 import time
 import json
@@ -95,7 +96,7 @@ def cdquit(fn_name):
     print('[-] Timeout: {0} took too long'.format(fn_name), file=sys.stderr)
     sys.stderr.flush() # Python 3 stderr is likely buffered.
     thread.interrupt_main() # raises KeyboardInterrupt
-    
+
 def timeout(s):
     '''
     use as decorator to exit process if 
@@ -131,17 +132,17 @@ def block_succs(addr):
     res = []
     try:
         bb = log_exec_r2_cmdj("afbj. @ %s" % (addr))
-    except:
+    except Exception:
         log.error("NO BASIC BLOCK AT %s"%(addr))
         return res
     bb = bb[0]
     try:
         res.append(int(bb["jump"]))
-    except:
+    except Exception:
         pass
     try:
         res.append(int(bb['fail']))
-    except:
+    except Exception:
         pass
     return res
 
@@ -149,7 +150,7 @@ def block_preds(addr):
     res = []
     try:
         bbs = log_exec_r2_cmdj("afbj @ %s"%(addr))
-    except:
+    except Exception:
         log.error("NO BASIC BLOCKS FOR %s"%(addr))
         return res
     if not bbs:
@@ -159,12 +160,12 @@ def block_preds(addr):
         try:
             if +bb["jump"] == addr:
                 res.push (+bb["addr"])
-        except:
+        except Exception:
             pass
         try:
             if +bb["fail"] == addr:
                 res.push (+bb["addr"])
-        except:
+        except Exception:
             pass
     return res
 
@@ -180,7 +181,7 @@ def get_switch_info_ex(ea):
 def int16(x):
     try:
         return int(x, 16)
-    except:
+    except Exception:
         if x != "":
             log.error("ERROR converting %s"%(x))
         return 0
@@ -238,7 +239,7 @@ def get_func(ea):
     # the start and end address, as well as the size, etc...
     fns = log_exec_r2_cmdj(f"afij @ {ea}")
     if fns and len(fns) > 0:
-        return log_exec_r2_cmdj(f"afij @ {ea}")[0]
+        return fns[0]
     else:
         return None
 
@@ -279,6 +280,9 @@ def GetCommentEx(x, type):
 
 def diaphora_decode(x):
     #decoded_size = int(r2.cmd("ao~size[1]"))
+    if x == 0:
+        return 0, []
+
     ins = log_exec_r2_cmdj(f"aoj 1 @ {x}")
     if len(ins) == 0:
         return 0, []
@@ -355,7 +359,7 @@ def MinEA():
         ea = 0
         try:
             ea = int(log_exec_r2_cmd('iSq~[0]'), 16)
-        except:
+        except Exception:
             pass
         return ea
 
@@ -370,7 +374,7 @@ def MaxEA():
     try:
         n = int(log_exec_r2_cmd('iSq~?'))
         ea = int(log_exec_r2_cmd('iSq~:{}[1]'.format(n-1)), 16)
-    except:
+    except Exception:
         pass
     return ea
 
@@ -429,7 +433,7 @@ g_bindiff = None
 #             self.relations = g[1]
 #             self.nodes = {}
 #             self.colours = colours
-#         except:
+#         except Exception:
 #             print("CDiffGraphViewer: OnInit!!! " + str(sys.exc_info()[1]))
 
 #     def OnRefresh(self):
@@ -451,7 +455,7 @@ g_bindiff = None
 #                     self.AddEdge(parent_node, child_node)
 
 #             return True
-#         except:
+#         except Exception:
 #             log.exception("GraphViewer Error")
 #             return True
 
@@ -467,7 +471,7 @@ g_bindiff = None
 #                 ret.append(row[2])
 #             label = "\n".join(ret)
 #             return (label, colour)
-#         except:
+#         except Exception:
 #             print("GraphViewer.OnGetText:", sys.exc_info()[1])
 #             return ("ERROR", 0x000000)
 
@@ -555,7 +559,7 @@ class CIDABinDiff(diaphora.CBinDiff):
     def export(self, function_filter = None, userdata = ""):
         try:
             self.do_export(function_filter, userdata)
-        except:
+        except Exception:
             log.exception("")
 
         self.db.commit()
@@ -999,14 +1003,14 @@ class CIDABinDiff(diaphora.CBinDiff):
     #         self.db.execute("detach diff")
     #         # We cannot run that code here or otherwise IDA will crash corrupting the stack
     #         timeraction_t(self.re_diff, None, 1000)
-    #     except:
+    #     except Exception:
     #         log.debug("import_all(): %s" % str(sys.exc_info()[1]))
     #         traceback.print_exc()
 
     # def import_all_auto(self, items):
     #     try:
     #         self.do_import_all_auto(items)
-    #     except:
+    #     except Exception:
     #         log.debug("import_all(): %s" % str(sys.exc_info()[1]))
     #         traceback.print_exc()
 
@@ -1041,7 +1045,7 @@ class CIDABinDiff(diaphora.CBinDiff):
                 ret = self.decompile_and_get(ea)
                 if ret:
                     t = ret
-            except:
+            except Exception:
                 log.warning("Cannot decompile 0x%x: %s" % (ea, str(sys.exc_info()[1])))
         return t
 
@@ -1180,7 +1184,7 @@ class CIDABinDiff(diaphora.CBinDiff):
                     else:
                         try:
                             assembly[block_ea] = ["loc_%x:" % x, disasm]
-                        except:
+                        except Exception:
                             assembly[block_ea] = ["loc_%s:" % x, disasm]
 
                 decoded_size, ins = diaphora_decode(x)
@@ -1319,7 +1323,7 @@ class CIDABinDiff(diaphora.CBinDiff):
                 val = len(item)
                 if val > 1:
                     strongly_connected_spp *= self.primes[val]
-        except:
+        except Exception:
             # XXX: FIXME: The original implementation that we're using is
             # recursive and can fail. We really need to create our own non
             # recursive version.
@@ -1343,13 +1347,13 @@ class CIDABinDiff(diaphora.CBinDiff):
         # address it is.
         try:
             keys.remove(f - image_base)
-        except:
+        except Exception:
             pass
         keys.insert(0, f - image_base)
         for key in keys:
             try:
                 asm.extend(assembly[key])
-            except:
+            except Exception:
                 log.exception("")
                 pass
         asm = "\n".join(asm)
@@ -1360,7 +1364,7 @@ class CIDABinDiff(diaphora.CBinDiff):
         proto2 = GetType(f)
         try:
             prime = str(self.primes[cc])
-        except:
+        except Exception:
             log.error("Cyclomatic complexity too big: 0x%x -> %d" % (f, cc))
             prime = 0
 
@@ -1389,7 +1393,7 @@ class CIDABinDiff(diaphora.CBinDiff):
 
         try:
             clean_assembly = self.get_cmp_asm_lines(asm)
-        except:
+        except Exception:
             clean_assembly = ""
             log.error("Error getting assembly for 0x%x" % f)
 
@@ -1701,7 +1705,7 @@ def _diff_or_export(function_filter = None, dbname = None, userdata = "", **opti
         #         profiler.print_stats(sort="time")
         #     else:
         #         bd.diff(opts.file_in)
-    except:
+    except Exception:
         log.exception(f"Exception while exporting DB {opts.file_out}")
 
     return bd

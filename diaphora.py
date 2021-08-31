@@ -295,6 +295,7 @@ class CBinDiff:
     if isinstance(threading.current_thread(), threading._MainThread):
       self.db = db
       self.create_schema()
+      self.create_indexes()
       self.db.commit()
 
   def get_db(self):
@@ -346,13 +347,13 @@ class CBinDiff:
                         bytes_hash text,
                         pseudocode mediumtext,
                         pseudocode_lines integer,
-                        pseudocode_hash1 text,
+                        pseudocode_hash1 varchar(256),
                         pseudocode_primes text,
                         function_flags integer,
                         assembly mediumtext,
                         prototype2 text,
-                        pseudocode_hash2 text,
-                        pseudocode_hash3 text,
+                        pseudocode_hash2 varchar(256),
+                        pseudocode_hash3 varchar(256),
                         strongly_connected integer,
                         loops integer,
                         rva text,
@@ -471,29 +472,29 @@ class CBinDiff:
     sql = "create index if not exists idx_names on functions(names)"
     cur.execute(sql)
     
-    sql = "create index if not exists idx_asm_pseudo on functions(assembly, pseudocode)"
-    cur.execute(sql)
+    # sql = "create index if not exists idx_asm_pseudo on functions(assembly, pseudocode)"
+    # cur.execute(sql)
 
     sql = "create index if not exists idx_nodes_edges_instructions on functions(nodes, edges, instructions)"
     cur.execute(sql)
 
-    sql = "create index if not exists idx_composite1 on functions(nodes, edges, mnemonics, names, cyclomatic_complexity, prototype2, indegree, outdegree)"
-    cur.execute(sql)
+    # sql = "create index if not exists idx_composite1 on functions(nodes, edges, mnemonics, names, cyclomatic_complexity, prototype2, indegree, outdegree)"
+    # cur.execute(sql)
 
-    sql = "create index if not exists idx_composite2 on functions(instructions, mnemonics, names)"
-    cur.execute(sql)
+    # sql = "create index if not exists idx_composite2 on functions(instructions, mnemonics, names)"
+    # cur.execute(sql)
 
     sql = "create index if not exists idx_composite3 on functions(nodes, edges, cyclomatic_complexity)"
     cur.execute(sql)
 
-    sql = "create index if not exists idx_composite4 on functions(pseudocode_lines, pseudocode)"
-    cur.execute(sql)
+    # sql = "create index if not exists idx_composite4 on functions(pseudocode_lines, pseudocode)"
+    # cur.execute(sql)
 
-    sql = "create index if not exists idx_composite5 on functions(pseudocode_lines, pseudocode_primes)"
-    cur.execute(sql)
+    # sql = "create index if not exists idx_composite5 on functions(pseudocode_lines, pseudocode_primes)"
+    # cur.execute(sql)
     
-    sql = "create index if not exists idx_composite6 on functions(names, mnemonics)"
-    cur.execute(sql)
+    # sql = "create index if not exists idx_composite6 on functions(names, mnemonics)"
+    # cur.execute(sql)
 
     sql = "create index if not exists idx_pseudocode_hash1 on functions(pseudocode_hash1)"
     cur.execute(sql)
@@ -525,11 +526,11 @@ class CBinDiff:
     sql = "create index if not exists idx_mnemonics_spp on functions(mnemonics_spp)"
     cur.execute(sql)
 
-    sql = "create index if not exists idx_clean_asm on functions(clean_assembly)"
-    cur.execute(sql)
+    # sql = "create index if not exists idx_clean_asm on functions(clean_assembly)"
+    # cur.execute(sql)
 
-    sql = "create index if not exists idx_clean_pseudo on functions(clean_pseudo)"
-    cur.execute(sql)
+    # sql = "create index if not exists idx_clean_pseudo on functions(clean_pseudo)"
+    # cur.execute(sql)
 
     sql = "create index if not exists idx_switches on functions(switches)"
     cur.execute(sql)
@@ -546,11 +547,11 @@ class CBinDiff:
     sql = "create index if not exists idx_kgh_hash on functions(kgh_hash)"
     cur.execute(sql)
 
-    sql = "create index if not exists idx_constants on functions(constants_count, constants)"
-    cur.execute(sql)
+    # sql = "create index if not exists idx_constants on functions(constants_count, constants)"
+    # cur.execute(sql)
 
-    sql = "create index if not exists idx_mdindex_constants on functions(md_index, constants_count, constants)"
-    cur.execute(sql)
+    # sql = "create index if not exists idx_mdindex_constants on functions(md_index, constants_count, constants)"
+    # cur.execute(sql)
 
     sql = "create index if not exists idx_instructions_address on instructions (address)"
     cur.execute(sql)
