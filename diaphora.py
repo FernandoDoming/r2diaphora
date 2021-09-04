@@ -505,8 +505,8 @@ class CBinDiff:
     sql = "create index if not exists idx_pseudocode_hash3 on functions(pseudocode_hash3)"
     cur.execute(sql)
 
-    sql = "create index if not exists idx_pseudocode_hash on functions(pseudocode_hash1, pseudocode_hash2, pseudocode_hash3)"
-    cur.execute(sql)
+    # sql = "create index if not exists idx_pseudocode_hash on functions(pseudocode_hash1, pseudocode_hash2, pseudocode_hash3)"
+    # cur.execute(sql)
 
     sql = "create index if not exists idx_strongly_connected on functions(strongly_connected)"
     cur.execute(sql)

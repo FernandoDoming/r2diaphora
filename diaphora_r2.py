@@ -1015,10 +1015,6 @@ class CIDABinDiff(diaphora.CBinDiff):
     #         traceback.print_exc()
 
     def decompile_and_get(self, ea):
-        f = get_func(ea)
-        if f is None:
-            return None
-
         sv = decompile(ea);
         if sv is None:
             # Failed to decompile
@@ -1087,18 +1083,17 @@ class CIDABinDiff(diaphora.CBinDiff):
     @timeout(300)
     def read_function(self, f, discard=False):
         log.debug(f"READ F {f}")
-        fcninfo = get_func(f)
-        if not fcninfo:
-            log.debug(f"Cannot find function at {f}")
-            return False
 
-        fcninfo.update({ "startEA": fcninfo["offset"]})
-        name = fcninfo["name"]
-        true_name = name
-        log.debug(f"F NAME {name}")
-        demangled_name = name #r2.cmdj(f"isj. @ {f}").get("name", "")
-        #if demangled_name != "":
-        #    name = demangled_name
+        try:
+            name_info = log_exec_r2_cmdj(f"fd.j @ {f}")[0]
+            name = name_info.get("name")
+            true_name = name_info.get("realname")
+            log.debug(f"F NAME {name}")
+            demangled_name = name #r2.cmdj(f"isj. @ {f}").get("name", "")
+            #if demangled_name != "":
+            #    name = demangled_name
+        except Exception:
+            log.exception(f"Could not read function name for address {f}")
 
         # WTF
         f = int(f)
@@ -1143,9 +1138,15 @@ class CIDABinDiff(diaphora.CBinDiff):
         bb_edges = []
         assembly_addrs = [] # TODO: Fill info
         kgh_hash = "" # TODO: Fill info
-        callers = [c["addr"] for c in fcninfo.get("codexrefs", [])]
-        callees = [c["addr"] for c in fcninfo.get("callrefs", [])]
-        constants = []
+        callers = [c.get("from") for c in log_exec_r2_cmdj(f"axtj @ {f}")]
+        fn_refs = log_exec_r2_cmdj(f"axffj @ {f}")
+        callees = [c.get("at") for c in fn_refs if c.get("type") == "CALL"]
+
+        # Intialize to string constants, inmediate constants will be added later
+        constants = [
+            GetString(r.get("ref"), -1, -1) for r in fn_refs 
+                        if r.get("type") == "DATA" and r.get("name", "").startswith("str.")
+        ]
 
         mnemonics_spp = 1
         cpu_ins_list = GetInstructionList()
@@ -1203,15 +1204,6 @@ class CIDABinDiff(diaphora.CBinDiff):
                     if oper["type"] == "imm":
                         if self.is_constant(oper, x) and self.constant_filter(oper["value"]):
                             constants.append(oper["value"])
-
-                    elif oper["type"] == "mem":
-                        drefs = list(DataRefsFrom(x))
-                        if len(drefs) > 0:
-                            for dref in drefs:
-                                if get_func(dref.get("from")) is None:
-                                    str_constant = GetString(dref, -1, -1)
-                                    if str_constant is not None and "value" in oper:
-                                        constants.append(oper["value"])
 
                 curr_bytes = GetManyBytes(x, decoded_size, False)
                 if curr_bytes is None or len(curr_bytes) != decoded_size:
@@ -1893,6 +1885,10 @@ def _r2_open(input_path):
     r2.cmd("e io.cache=true")
     #r2.cmd("aeim")
     r2.cmd("e anal.hasnext=true")
+
+    # Workaround to load the Ghidra plugins because ccall is bugged 
+    # and does not load it automatically
+    r2.cmd(f"L {os.path.expanduser('~/.local/share/radare2/plugins/core_ghidra.dylib')}")
 
 def _r2_close():
     global r2
