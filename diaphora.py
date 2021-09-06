@@ -308,7 +308,7 @@ class CBinDiff:
 
   def db_cursor(self):
     db = self.get_db()
-    return db.cursor(dictionary=True)
+    return db.cursor(dictionary=True, buffered=True)
 
   def db_close(self):
     tid = threading.current_thread().ident
@@ -1668,12 +1668,9 @@ class CBinDiff:
   def get_function_id(self, name, primary=True):
     cur = self.db_cursor()
     rid = None
-    db_name = "main"
-    if not primary:
-      db_name = "diff"
 
     try:
-      sql = "select id from %s.functions where name = %s" % db_name
+      sql = f"select id from `{self.db_name}`.functions where name = %s"
       cur.execute(sql, (name,))
       row = cur.fetchone()
       if row:
@@ -1694,7 +1691,7 @@ class CBinDiff:
       desc = "Call address sequence"
       id1 = row["id1"]
       id2 = row["id2"]
-      sql = f""" select * from functions where id = %s """ + postfix + """
+      sql = f""" select * from functions where id = %s """ + postfix + f"""
                 union all 
                 select * from `{self.last_diff_db}`.functions where id = %s """ + postfix
 
@@ -1771,7 +1768,18 @@ class CBinDiff:
     cur = self.db_cursor()
     try:
       # Create a copy of all the functions
-      cur.execute("create temporary table best_matches (id, id1, ea1, name1, id2, ea2, name2)")
+      cur.execute("""
+        create temporary table best_matches 
+              (
+                id integer,
+                id1 integer,
+                ea1 varchar(255),
+                name1 varchar(255),
+                id2 integer,
+                ea2 varchar(255),
+                name2 varchar(255)
+              )
+      """)
 
       # Insert each matched function into the temporary table
       i = 0
@@ -1994,6 +2002,25 @@ class CBinDiff:
 
     self.unmatched_second = self.chooser("Unmatched in secondary", self, False)
     self.unmatched_primary = self.chooser("Unmatched in primary", self, False)
+
+  def get_results(self):
+    matches = []
+    for item in self.best_chooser.items:
+      m = result_tuple_to_dict(item)
+      m["type"] = "best"
+      matches.append(m)
+
+    for item in self.partial_chooser.items:
+      m = result_tuple_to_dict(item)
+      m["type"] = "partial"
+      matches.append(m)
+
+    for item in self.unreliable_chooser.items:
+      m = result_tuple_to_dict(item)
+      m["type"] = "unreliable"
+      matches.append(m)
+
+    return matches
 
   def save_results(self, filename):
     db_attrs = get_db_attrs()

@@ -49,7 +49,7 @@ HEURISTICS.append({
                    f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
                    f.nodes bb1, df.nodes bb2,
                    cast(f.md_index as float) md1, cast(df.md_index as float) md2
-              from functions f,
+              from $MAIN$.functions f,
                    $DIFF$.functions df
              where (df.rva = f.rva
                  or df.segment_rva = f.segment_rva)
@@ -71,7 +71,7 @@ HEURISTICS.append({
                    f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
                    f.nodes bb1, df.nodes bb2,
                    cast(f.md_index as float) md1, cast(df.md_index as float) md2
-              from functions f,
+              from $MAIN$.functions f,
                    $DIFF$.functions df
              where df.id = f.id
                and df.bytes_hash = f.bytes_hash
@@ -95,7 +95,7 @@ HEURISTICS.append({
                    f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
                    f.nodes bb1, df.nodes bb2,
                    cast(f.md_index as float) md1, cast(df.md_index as float) md2
-              from functions f,
+              from $MAIN$.functions f,
                    $DIFF$.functions df
              where f.function_hash = df.function_hash 
                and ((f.nodes > 1 and df.nodes > 1
@@ -115,7 +115,7 @@ HEURISTICS.append({
                     f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
                     f.nodes bb1, df.nodes bb2,
                     cast(f.md_index as float) md1, cast(df.md_index as float) md2
-                from functions f,
+                from $MAIN$.functions f,
                      $DIFF$.functions df
                where f.bytes_hash = df.bytes_hash
                  and f.names = df.names
@@ -135,7 +135,7 @@ HEURISTICS.append({
                    f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
                    f.nodes bb1, df.nodes bb2,
                    cast(f.md_index as float) md1, cast(df.md_index as float) md2
-              from functions f,
+              from $MAIN$.functions f,
                    $DIFF$.functions df
              where f.bytes_hash = df.bytes_hash
                and f.instructions > 5 and df.instructions > 5""",
@@ -153,7 +153,7 @@ HEURISTICS.append({
                    f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
                    f.nodes bb1, df.nodes bb2,
                    cast(f.md_index as float) md1, cast(df.md_index as float) md2
-              from functions f,
+              from $MAIN$.functions f,
                    $DIFF$.functions df
              where f.bytes_sum = df.bytes_sum
                and f.size = df.size
@@ -172,7 +172,7 @@ HEURISTICS.append({
             f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
             f.nodes bb1, df.nodes bb2,
             cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where f.pseudocode = df.pseudocode
         and df.pseudocode is not null
@@ -187,7 +187,7 @@ HEURISTICS.append({
             f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
             f.nodes bb1, df.nodes bb2,
             cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where f.assembly = df.assembly
         and df.assembly is not null
@@ -208,9 +208,9 @@ HEURISTICS.append({
                    f.assembly asm1, df.assembly asm2,
                    f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
                    f.nodes bb1, df.nodes bb2,
-                   cast(f.md_index as real) md1, cast(df.md_index as real) md2
-              from functions f,
-                   diff.functions df
+                   cast(f.md_index as double) md1, cast(df.md_index as double) md2
+              from $MAIN$.functions f,
+                   $DIFF$.functions df
              where df.address = f.address
                and df.mnemonics = f.mnemonics
                and df.instructions = f.instructions
@@ -231,7 +231,7 @@ HEURISTICS.append({
              f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
              f.nodes bb1, df.nodes bb2,
              cast(f.md_index as float) md1, cast(df.md_index as float) md2
-        from functions f,
+        from $MAIN$.functions f,
              $DIFF$.functions df
        where f.clean_assembly = df.clean_assembly
          and f.nodes > 3 and df.nodes > 3
@@ -251,7 +251,7 @@ HEURISTICS.append({
              f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
              f.nodes bb1, df.nodes bb2,
              cast(f.md_index as float) md1, cast(df.md_index as float) md2
-        from functions f,
+        from $MAIN$.functions f,
              $DIFF$.functions df
        where f.clean_pseudo = df.clean_pseudo
          and f.pseudocode_lines > 5 and df.pseudocode_lines > 5
@@ -270,7 +270,7 @@ HEURISTICS.append({
             f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
             f.nodes bb1, df.nodes bb2,
             cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where f.rva = df.rva
         and f.instructions = df.instructions
@@ -291,9 +291,9 @@ HEURISTICS.append({
                    f.assembly asm1, df.assembly asm2,
                    f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
                    f.nodes bb1, df.nodes bb2,
-                   cast(f.md_index as real) md1, cast(df.md_index as real) md2
-              from functions f,
-                   diff.functions df
+                   cast(f.md_index as double) md1, cast(df.md_index as double) md2
+              from $MAIN$.functions f,
+                   $DIFF$.functions df
              where df.rva = f.rva
                %POSTFIX%""",
   "min":0.7,
@@ -311,7 +311,7 @@ HEURISTICS.append({
              f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
              f.nodes bb1, df.nodes bb2,
              cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where f.constants = df.constants
         and f.constants_count = df.constants_count
@@ -352,7 +352,7 @@ HEURISTICS.append({
             f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
             f.nodes bb1, df.nodes bb2,
             cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df,
             (select kgh_hash
                from $DIFF$.functions
@@ -383,7 +383,7 @@ HEURISTICS.append({
             f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
             f.nodes bb1, df.nodes bb2,
             cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df,
             (select md_index
                from $DIFF$.functions
@@ -460,7 +460,7 @@ HEURISTICS.append({
              f.nodes bb1, df.nodes bb2,
              cast(f.md_index as float) md1, cast(df.md_index as float) md2,
              df.tarjan_topological_sort, df.strongly_connected_spp
-        from functions f,
+        from $MAIN$.functions f,
              $DIFF$.functions df
        where f.md_index = df.md_index
          and f.md_index > 0
@@ -481,7 +481,7 @@ HEURISTICS.append({
             f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
             f.nodes bb1, df.nodes bb2,
             cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where f.nodes = df.nodes 
         and f.edges = df.edges
@@ -511,7 +511,7 @@ HEURISTICS.append({
             f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
             f.nodes bb1, df.nodes bb2,
             cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
        where f.nodes = df.nodes 
          and f.edges = df.edges
@@ -543,7 +543,7 @@ HEURISTICS.append({
             f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
             f.nodes bb1, df.nodes bb2,
             cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where f.switches = df.switches
         and df.switches != '[]'
@@ -564,7 +564,7 @@ HEURISTICS.append({
              f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
              f.nodes bb1, df.nodes bb2,
              cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where f.rva = df.rva
         and f.instructions = df.instructions
@@ -587,7 +587,7 @@ HEURISTICS.append({
              f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
              f.nodes bb1, df.nodes bb2,
              cast(f.md_index as float) md1, cast(df.md_index as float) md2
-        from functions f,
+        from $MAIN$.functions f,
              $DIFF$.functions df
        where f.names = df.names
          and f.names != '[]'
@@ -608,7 +608,7 @@ HEURISTICS.append({
                      f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
                      f.nodes bb1, df.nodes bb2,
                      cast(f.md_index as float) md1, cast(df.md_index as float) md2
-                from functions f,
+                from $MAIN$.functions f,
                      $DIFF$.functions df
                where f.nodes = df.nodes
                  and f.edges = df.edges
@@ -630,7 +630,7 @@ HEURISTICS.append({
                      f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
                      f.nodes bb1, df.nodes bb2,
                      cast(f.md_index as float) md1, cast(df.md_index as float) md2
-                from functions f,
+                from $MAIN$.functions f,
                      $DIFF$.functions df
                where f.nodes = df.nodes
                  and f.edges = df.edges
@@ -654,7 +654,7 @@ HEURISTICS.append({
              f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
              f.nodes bb1, df.nodes bb2,
              cast(f.md_index as float) md1, cast(df.md_index as float) md2
-        from functions f,
+        from $MAIN$.functions f,
              $DIFF$.functions df
        where f.mnemonics = df.mnemonics
          and f.instructions = df.instructions
@@ -675,7 +675,7 @@ HEURISTICS.append({
             f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
             f.nodes bb1, df.nodes bb2,
             cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where df.pseudocode_hash1 = f.pseudocode_hash1
         and f.instructions > 5 and df.instructions > 5 """,
@@ -692,7 +692,7 @@ HEURISTICS.append({
             f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
             f.nodes bb1, df.nodes bb2,
             cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where df.pseudocode_hash3 = f.pseudocode_hash3
         and f.instructions > 5 and df.instructions > 5 """,
@@ -709,7 +709,7 @@ HEURISTICS.append({
             f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
             f.nodes bb1, df.nodes bb2,
             cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where df.pseudocode_hash2 = f.pseudocode_hash2
         and f.instructions > 5 and df.instructions > 5 """,
@@ -726,7 +726,7 @@ HEURISTICS.append({
             f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
             f.nodes bb1, df.nodes bb2,
             cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where df.pseudocode_hash1 = f.pseudocode_hash1
         and df.pseudocode_hash2 = f.pseudocode_hash2
@@ -746,7 +746,7 @@ HEURISTICS.append({
             f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
             f.nodes bb1, df.nodes bb2,
             cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where f.pseudocode_lines = df.pseudocode_lines
         and f.names = df.names
@@ -768,7 +768,7 @@ HEURISTICS.append({
             f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
             f.nodes bb1, df.nodes bb2,
             cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where df.pseudocode_primes = f.pseudocode_primes
         and f.pseudocode_lines > 3
@@ -787,7 +787,7 @@ HEURISTICS.append({
               f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
               f.nodes bb1, df.nodes bb2,
               cast(f.md_index as float) md1, cast(df.md_index as float) md2
-         from functions f,
+         from $MAIN$.functions f,
               $DIFF$.functions df
         where substr(df.pseudocode_hash1, 1, 16) = substr(f.pseudocode_hash1, 1, 16)
           and f.nodes > 5 and df.nodes > 5""",
@@ -806,7 +806,7 @@ HEURISTICS.append({
               f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
               f.nodes bb1, df.nodes bb2,
               cast(f.md_index as float) md1, cast(df.md_index as float) md2
-         from functions f,
+         from $MAIN$.functions f,
               $DIFF$.functions df
         where substr(df.pseudocode_hash2, 1, 16) = substr(f.pseudocode_hash2, 1, 16)
           and f.nodes > 5 and df.nodes > 5""",
@@ -824,7 +824,7 @@ HEURISTICS.append({
               f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
               f.nodes bb1, df.nodes bb2,
               cast(f.md_index as float) md1, cast(df.md_index as float) md2
-         from functions f,
+         from $MAIN$.functions f,
               $DIFF$.functions df
         where substr(df.pseudocode_hash3, 1, 16) = substr(f.pseudocode_hash3, 1, 16)
           and f.nodes > 5 and df.nodes > 5""",
@@ -842,7 +842,7 @@ HEURISTICS.append({
               f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
               f.nodes bb1, df.nodes bb2,
               cast(f.md_index as float) md1, cast(df.md_index as float) md2
-         from functions f,
+         from $MAIN$.functions f,
               $DIFF$.functions df
         where f.strongly_connected_spp = df.strongly_connected_spp
           and df.strongly_connected_spp > 1
@@ -861,7 +861,7 @@ HEURISTICS.append({
             f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
             f.nodes bb1, df.nodes bb2,
             cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where f.loops = df.loops
         and df.loops > 1
@@ -883,7 +883,7 @@ HEURISTICS.append({
              f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
              f.nodes bb1, df.nodes bb2,
              cast(f.md_index as float) md1, cast(df.md_index as float) md2
-        from functions f,
+        from $MAIN$.functions f,
              $DIFF$.functions df
        where f.mnemonics_spp = df.mnemonics_spp
          and f.instructions = df.instructions
@@ -903,7 +903,7 @@ HEURISTICS.append({
             f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
             f.nodes bb1, df.nodes bb2,
             cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where f.pseudocode_lines = df.pseudocode_lines
         and df.pseudocode_lines > 5
@@ -925,7 +925,7 @@ HEURISTICS.append({
              f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
              f.nodes bb1, df.nodes bb2,
              cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where f.nodes = df.nodes
         and f.edges = df.edges
@@ -945,7 +945,7 @@ HEURISTICS.append({
             f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
             f.nodes bb1, df.nodes bb2,
             cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where f.pseudocode_lines = df.pseudocode_lines
         and df.pseudocode_lines <= 5
@@ -965,7 +965,7 @@ HEURISTICS.append({
             f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
             f.nodes bb1, df.nodes bb2,
             cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where df.pseudocode_primes = f.pseudocode_primes
         and f.pseudocode_lines <= 5""",
@@ -982,7 +982,7 @@ HEURISTICS.append({
             f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
             f.nodes bb1, df.nodes bb2,
             cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where f.pseudocode = df.pseudocode
         and df.pseudocode is not null
@@ -1001,7 +1001,7 @@ HEURISTICS.append({
               f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
               f.nodes bb1, df.nodes bb2,
               cast(f.md_index as float) md1, cast(df.md_index as float) md2
-         from functions f,
+         from $MAIN$.functions f,
               $DIFF$.functions df
         where f.names = df.names
           and f.cyclomatic_complexity = df.cyclomatic_complexity
@@ -1023,7 +1023,7 @@ HEURISTICS.append({
             f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
             f.nodes bb1, df.nodes bb2,
             cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where f.names = df.names
         and f.cyclomatic_complexity = df.cyclomatic_complexity
@@ -1045,7 +1045,7 @@ HEURISTICS.append({
              f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
              f.nodes bb1, df.nodes bb2,
              cast(f.md_index as float) md1, cast(df.md_index as float) md2
-        from functions f,
+        from $MAIN$.functions f,
              $DIFF$.functions df
        where f.nodes = df.nodes 
          and f.edges = df.edges
@@ -1085,7 +1085,7 @@ HEURISTICS.append({
              f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
              f.nodes bb1, df.nodes bb2,
              cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where f.strongly_connected = df.strongly_connected
         and f.tarjan_topological_sort = df.tarjan_topological_sort
@@ -1106,7 +1106,7 @@ HEURISTICS.append({
              f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
              f.nodes bb1, df.nodes bb2,
              cast(f.md_index as float) md1, cast(df.md_index as float) md2
-        from functions f,
+        from $MAIN$.functions f,
              $DIFF$.functions df
        where f.names = df.names
          and f.names != '[]'
@@ -1127,7 +1127,7 @@ HEURISTICS.append({
             f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
             f.nodes bb1, df.nodes bb2,
             cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where f.strongly_connected = df.strongly_connected
         and df.strongly_connected > 1
@@ -1149,7 +1149,7 @@ HEURISTICS.append({
             f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
             f.nodes bb1, df.nodes bb2,
             cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where f.loops = df.loops
         and df.loops > 1
@@ -1168,7 +1168,7 @@ HEURISTICS.append({
              f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
              f.nodes bb1, df.nodes bb2,
              cast(f.md_index as float) md1, cast(df.md_index as float) md2
-        from functions f,
+        from $MAIN$.functions f,
              $DIFF$.functions df
        where f.nodes = df.nodes
          and f.edges = df.edges
@@ -1190,7 +1190,7 @@ HEURISTICS.append({
              f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
              f.nodes bb1, df.nodes bb2,
              cast(f.md_index as float) md1, cast(df.md_index as float) md2
-        from functions f,
+        from $MAIN$.functions f,
              $DIFF$.functions df
        where f.nodes = df.nodes
          and f.edges = df.edges
@@ -1212,7 +1212,7 @@ HEURISTICS.append({
              f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
              f.nodes bb1, df.nodes bb2,
              cast(f.md_index as float) md1, cast(df.md_index as float) md2
-        from functions f,
+        from $MAIN$.functions f,
              $DIFF$.functions df
        where f.nodes = df.nodes
          and f.edges = df.edges
@@ -1235,7 +1235,7 @@ HEURISTICS.append({
              f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
              f.nodes bb1, df.nodes bb2,
              cast(f.md_index as float) md1, cast(df.md_index as float) md2
-        from functions f,
+        from $MAIN$.functions f,
              $DIFF$.functions df
        where f.nodes = df.nodes
          and f.edges = df.edges
@@ -1255,7 +1255,7 @@ HEURISTICS.append({
             f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
             f.nodes bb1, df.nodes bb2,
             cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where df.pseudocode is not null 
         and f.pseudocode is not null
@@ -1276,7 +1276,7 @@ HEURISTICS.append({
             f.pseudocode_primes pseudo_primes1, df.pseudocode_primes pseudo_primes2,
             f.nodes bb1, df.nodes bb2,
             cast(f.md_index as float) md1, cast(df.md_index as float) md2
-       from functions f,
+       from $MAIN$.functions f,
             $DIFF$.functions df
       where f.cyclomatic_complexity = df.cyclomatic_complexity
         and f.cyclomatic_complexity >= 50
