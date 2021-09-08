@@ -724,6 +724,11 @@ class CIDABinDiff(diaphora.CBinDiff):
             # Failed to decompile
             return None
 
+        # cfunc = self.do_decompile(f)
+        # visitor = CAstVisitor(cfunc)
+        # visitor.apply_to(cfunc.body, None)
+        # self.pseudo_hash[ea] = visitor.primes_hash
+
         self.pseudo_hash[ea] = 0
         self.pseudo[ea] = []
 

@@ -1,8 +1,11 @@
 import os
 import time
 import logging
-from logging.handlers import RotatingFileHandler
+import traceback
 import r2pipe
+
+from jkutils.factor import primesbelow as primes
+from instructions import CPU_INSTRUCTIONS
 
 LOG_FORMAT = "%(asctime)-15s [%(levelname)s] - %(message)s"
 log = logging.getLogger("diaphora.idaconv")
@@ -17,6 +20,39 @@ log.addHandler(console)
 #-----------------------------------------------------------------------
 BADADDR = 0xFFFFFFFFFFFFFFFF
 r2 = None
+
+#-------------------------------------------------------------------------------
+class ctree_visitor_t():
+    def __init__(self, _):
+        pass
+
+    def apply_to(self, item, parent):
+        pass
+
+
+#-------------------------------------------------------------------------------
+class CAstVisitor(ctree_visitor_t):
+  def __init__(self, cfunc):
+    self.primes = primes(4096)
+    ctree_visitor_t.__init__(self)
+    self.cfunc = cfunc
+    self.primes_hash = 1
+    return
+
+  def visit_expr(self, expr):
+    try:
+      self.primes_hash *= self.primes[expr.op]
+    except:
+      traceback.print_exc()
+    return 0
+
+  def visit_insn(self, ins):
+    try:
+      self.primes_hash *= self.primes[ins.op]
+    except:
+      traceback.print_exc()
+    return 0
+
 
 #-----------------------------------------------------------------------
 def log_exec_r2_cmdj(cmd):
@@ -173,28 +209,8 @@ def get_func(ea):
 
 #-----------------------------------------------------------------------
 def GetInstructionList():
-    # TODO: Return a list of the total mnemonics supported by the current
-    # disassembler. It's used to calculate the small-primes-product of the
-    # function, by assigning a prime correspondent to the mnemonic in the
-    # given list. Example:
-    #
-    # CPU_MY_ARCH = ["push", "pop", "call", "ret", "mov"]
-    #
-    # Given than example instruction set, push would be 2, pop 3, call 5,
-    # ret 7 and mov 11. Then, for a function like this:
-    #
-    # push 1
-    # pop  y
-    # call x
-    # ret
-    #
-    # ...it would calculate a SPP of 2*3*5*7 (210). If the instructions
-    # are re-ordered, it will still give out the same "hash" value and,
-    # also, if there are different instructions when comparing 2 functions
-    # we can just remove all the common primes in the 2 sets and determine
-    # which are the specific instructions that are different between them.
-    #
-    return []
+    arch = log_exec_r2_cmdj("ij").get("bin", {}).get("arch", "")
+    return CPU_INSTRUCTIONS.get(arch, [])
 
 #-----------------------------------------------------------------------
 def Heads(startEA, endEA):
@@ -364,3 +380,4 @@ def r2_close():
 
 def get_r2():
     return r2
+

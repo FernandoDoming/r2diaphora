@@ -106,7 +106,7 @@ class CKoretKaramitasHash:
     _, inss = diaphora_decode(ea)
     if len(inss) < 1:
       return False
-    return inss[0].get("type") == "call"
+    return "call" in inss[0].get("type")
 
   def calculate(self, f):
     fname = get_function_name(f).get("name")
