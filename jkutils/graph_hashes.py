@@ -14,20 +14,16 @@ Copyright (c) 2018-2019, Joxean Koret
 
 import sys
 import time
+import logging
 
-from idc import *
-from idaapi import *
-from idautils import *
+from idaapi_to_r2 import *
 
 try:
   from others.tarjan_sort import strongly_connected_components
 except ImportError:
   from tarjan_sort import strongly_connected_components
 
-#-------------------------------------------------------------------------------
-def log(msg):
-  Message("[%s] %s\n" % (time.asctime(), msg))
-  replace_wait_box(msg)
+log = logging.getLogger("diaphora.graph_hashes")
 
 #-------------------------------------------------------------------------------
 # Different type of basic blocks (graph nodes).
@@ -67,9 +63,23 @@ FEATURE_FUNC_THUNK = 47
 #-------------------------------------------------------------------------------
 # Implementation of the KOKA (Koret-Karamitas) hashing algorithm for IDA
 class CKoretKaramitasHash:
-  def __init__(self):
-    pass
+  def __init__(self, r2):
+    self.r2 = r2
 
+  #-------------------------------------------------------------------------------
+  def log_exec_r2_cmdj(self, cmd):
+    s = time.time()
+    r = self.r2.cmdj(cmd)
+    log.debug(f"R2 CMDJ: {cmd}: {time.time() - s}s")
+    return r
+
+  def log_exec_r2_cmd(self, cmd):
+    s = time.time()
+    r = self.r2.cmd(cmd)
+    log.debug(f"R2 CMD: {cmd}: {time.time() - s}s")
+    return r
+
+  #-------------------------------------------------------------------------------
   def get_node_value(self, succs, preds):
     """ Return a set of prime numbers corresponding to the characteristics of the node. """
     ret = 1
@@ -93,16 +103,17 @@ class CKoretKaramitasHash:
     return ret
 
   def is_call_insn(self, ea):
-    ins = ida_ua.insn_t()
-    ida_ua.decode_insn(ins, ea)
-    return ida_idp.is_call_insn(ins)
+    _, inss = diaphora_decode(ea)
+    if len(inss) < 1:
+      return False
+    return inss[0].get("type") == "call"
 
   def calculate(self, f):
-    func = get_func(f)
-    if func is None:
+    fname = get_function_name(f).get("name")
+    if not fname:
       return "NO-FUNCTION"
-    
-    flow = FlowChart(func)
+
+    flow = self.log_exec_r2_cmdj(f"afbj @ {f}")
     if flow is None:
       return "NO-FLOW-GRAPH"
 
@@ -113,18 +124,22 @@ class CKoretKaramitasHash:
 
     # Iterate through each basic block
     for block in flow:
-      block_ea = block.start_ea
-      if block.end_ea == 0:
+      block_ea = +block['addr'];
+      block_end_ea = +block['addr'] + +block['size'];
+      block.update({"start_ea": block_ea})
+      block.update({"end_ea": block_end_ea})
+
+      if block["end_ea"] == 0:
         continue
 
-      succs = list(block.succs())
-      preds = list(block.preds())
+      succs = block_succs(block_ea)
+      preds = block_preds(block_ea)
 
       hash *= self.get_node_value(len(succs), len(preds))
       hash *= self.get_edges_value(block, succs, preds)
 
       # ...and each instruction on each basic block
-      for ea in list(Heads(block.start_ea, block.end_ea)):
+      for ea in list(Heads(block["start_ea"], block["end_ea"])):
 
         if self.is_call_insn(ea):
           hash *= FEATURE_CALL
@@ -134,23 +149,22 @@ class CKoretKaramitasHash:
           hash *= FEATURE_DATA_REFS
 
         for xref in CodeRefsFrom(ea, 0):
-          tmp_func = get_func(xref)
-          if tmp_func is None or tmp_func.start_ea != func.start_ea:
+          if not is_func(xref) or get_flag_at_addr(xref).get("name") != fname:
             hash *= FEATURE_CALL_REF
 
         # Remember the relationships
         bb_relations[block_ea] = []
 
         # Iterate the succesors of this basic block
-        for succ_block in block.succs():
-          bb_relations[block_ea].append(succ_block.start_ea)
+        for succ_block_ea in succs:
+          bb_relations[block_ea].append(succ_block_ea)
 
         # Iterate the predecessors of this basic block
-        for pred_block in block.preds():
+        for pred_block_ea in preds:
           try:
-            bb_relations[pred_block.start_ea].append(block.start_ea)
+            bb_relations[pred_block_ea].append(block["start_ea"])
           except KeyError:
-            bb_relations[pred_block.start_ea] = [block.start_ea]
+            bb_relations[pred_block_ea] = [block["start_ea"]]
 
     # Calculate the strongly connected components
     try:
@@ -169,13 +183,12 @@ class CKoretKaramitasHash:
     except:
       print("Exception:", str(sys.exc_info()[1]))
 
-    flags = get_func_attr(f, FUNCATTR_FLAGS)
-    if flags & FUNC_NORET:
+    if fname in no_ret_functions():
       hash *= FEATURE_FUNC_NO_RET
-    if flags & FUNC_LIB:
+    if fname.startswith("flirt."):
       hash *= FEATURE_FUNC_LIB
-    if flags & FUNC_THUNK:
-      hash *= FEATURE_FUNC_THUNK
+    # if flags & FUNC_THUNK:
+    #   hash *= FEATURE_FUNC_THUNK
 
     return str(hash)
 
