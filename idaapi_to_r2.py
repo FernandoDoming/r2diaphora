@@ -77,6 +77,15 @@ def no_ret_functions():
     _no_ret_fns = log_exec_r2_cmd("tn").split("\n")
     return _no_ret_fns
 
+_all_fns = None
+def get_all_fns():
+    global _all_fns
+    if _all_fns:
+        return _all_fns
+
+    _all_fns = log_exec_r2_cmdj("aflj")
+    return _all_fns
+
 def get_function_name(ea):
     try:
         return log_exec_r2_cmdj(f"fd.j @ {ea}")[0]
@@ -88,6 +97,13 @@ def get_flag_at_addr(ea):
 
 def is_func(ea):
     return bool(log_exec_r2_cmdj(f"fd.j @ {ea}"))
+
+def test_addr_within_function(f, ea):
+    fn = next(filter(lambda fn: fn["offset"] == f, get_all_fns()), None)
+    if not fn:
+        return False
+
+    return ea >= fn["offset"] and ea <= (fn["offset"] + fn["size"])
 
 #-----------------------------------------------------------------------
 def block_succs(addr):
@@ -375,8 +391,12 @@ def r2_open(input_path):
 
 def r2_close():
     global r2
+    global _all_fns
+    global _no_ret_fns
     r2.quit()
     r2 = None
+    _all_fns = None
+    _no_ret_fns = None
 
 def get_r2():
     return r2

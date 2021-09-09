@@ -846,7 +846,7 @@ class CIDABinDiff(diaphora.CBinDiff):
         bb_degree = {}
         bb_edges = []
         assembly_addrs = [] # TODO: Fill info
-        kgh_hash = "" # TODO: Fill info
+        kgh_hash = ""
         callers = [c.get("from") for c in log_exec_r2_cmdj(f"axtj @ {f}")]
         fn_refs = log_exec_r2_cmdj(f"axffj @ {f}")
         callees = [c.get("at") for c in fn_refs if c.get("type") == "CALL"]
@@ -862,6 +862,7 @@ class CIDABinDiff(diaphora.CBinDiff):
         cpu_ins_list.sort()
 
         image_base = self.get_base_address()
+        flags = log_exec_r2_cmdj("fj")
         s = time.time()
         log.debug(f"Fn {name} - Starting block iteration")
         for block in flow:
@@ -952,29 +953,6 @@ class CIDABinDiff(diaphora.CBinDiff):
                 ins_cmt2 = GetCommentEx(x, 1)
                 instructions_data.append([x - image_base, mnem, disasm, ins_cmt1, ins_cmt2, tmp_name, tmp_type])
 
-                switch = get_switch_info_ex(x)
-                if switch:
-                    switch_cases = switch.get_jtable_size()
-                    results = calc_switch_cases(x, switch)
-
-                    # It seems that IDAPython for idaq64 has some bug when reading
-                    # switch's cases. Do not attempt to read them if the 'cur_case'
-                    # returned object is not iterable.
-                    can_iter = False
-                    switch_cases_values = set()
-                    for idx in range(len(results.cases)):
-                        cur_case = results.cases[idx]
-                        if not '__iter__' in dir(cur_case):
-                            break
-
-                        can_iter |= True
-                        for cidx in range(len(cur_case)):
-                            case_id = cur_case[cidx]
-                            switch_cases_values.add(case_id)
-
-                    if can_iter:
-                        switches.append([switch_cases, list(switch_cases_values)])
-
             basic_blocks_data[block_ea] = instructions_data
             bb_relations[block_ea] = []
             if block_ea not in bb_degree:
@@ -1012,6 +990,18 @@ class CIDABinDiff(diaphora.CBinDiff):
                 succ_base = block_startEA - image_base
                 bb_topological[bb_topo_num[block_ea]].append(bb_topo_num[succ_base])
         log.debug(f"Fn {name} - Block iteration: {time.time() - s}s")
+
+        sws = [f for f in flags if f["name"].startswith("switch.")]
+        for sw in sws:
+            # Flags have an offset value, but this value is not the same for 
+            # switch flags and their cases
+            sw_ref = sw["name"].split(".")[1].lstrip("0x").lstrip("0")
+            if not test_addr_within_function(f, sw["offset"]):
+                continue
+
+            cases = [f for f in flags if f["name"].startswith(f"case.0x{sw_ref}.")]
+            cases_values = [case["name"].split(".")[-1] for case in cases]
+            switches.append([len(cases), cases_values])
 
         s = time.time()
         strongly_connected_spp = 0
