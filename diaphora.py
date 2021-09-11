@@ -1737,8 +1737,11 @@ class CBinDiff:
       thresold = min(0.6, float(item[5]))
       for j in range(0, min(10, id1 - last)):
         for i in range(0, min(10, id1 - last)):
-          cur.execute(sql, (id1+j, id2+i))
-          rows = cur.fetchall()
+          try:
+            cur.execute(sql, (id1+j, id2+i))
+            rows = cur.fetchall()
+          except Exception:
+            continue
           if len(rows) == 2:
             name1 = rows[0]["name"]
             name2 = rows[1]["name"]

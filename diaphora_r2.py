@@ -1565,6 +1565,12 @@ if __name__ == "__main__":
         help='Force DB override'
     )
 
+    parser.add_argument(
+        "-o",
+        default=None,
+        help="Diff output file (HTML) - Default value: <db1name>_vs_<db2name>.html"
+    )
+
     args = parser.parse_args()
     args.file1 = args.file1[0]
 
@@ -1595,4 +1601,9 @@ if __name__ == "__main__":
         bd.open_db()
         bd.diff(db2name)
         matches = bd.get_results()
-        HtmlResults(matches, file1=args.file1, file2=args.file2).render("matches.html")
+        output_name = None
+        if args.o:
+            output_name = args.o
+        else:
+            output_name = f"{db1name[0:10]}_vs_{db2name[0:10]}.html"
+        HtmlResults(matches, file1=args.file1, file2=args.file2).render(output_name)
