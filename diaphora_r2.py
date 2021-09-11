@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python3
 """
 Diaphora, a diffing plugin for Radare2
 Copyright (c) 2017, Sergi Alvarez
@@ -17,7 +17,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
-along with this program.  If not, see <http://www.gnu.org/licenses/>.
+along with this program. If not, see <http://www.gnu.org/licenses/>.
 """
 
 import os
@@ -27,11 +27,10 @@ import time
 import json
 import decimal
 import difflib
-import traceback
 import threading
+import argparse
 import logging
 from logging.handlers import RotatingFileHandler
-import r2pipe
 from hashlib import md5, sha256
 
 try:
@@ -51,6 +50,7 @@ from others.tarjan_sort import strongly_connected_components, robust_topological
 from jkutils.factor import primesbelow as primes
 from jkutils.graph_hashes import CKoretKaramitasHash
 from idaapi_to_r2 import *
+from html_diff import *
 
 LOG_FORMAT = "%(asctime)-15s [%(levelname)s] - %(message)s"
 log = logging.getLogger("diaphora.r2")
@@ -333,42 +333,6 @@ class CIDABinDiff(diaphora.CBinDiff):
         self.import_til()
         self.import_definitions()
 
-    # def show_asm_diff(self, item):
-    #     cur = self.db_cursor()
-    #     sql = """select *
-    #                          from (
-    #                      select prototype, assembly, name, 1
-    #                          from functions
-    #                         where address = ?
-    #                             and assembly is not null
-    #          union select prototype, assembly, name, 2
-    #                          from diff.functions
-    #                         where address = ?
-    #                             and assembly is not null)
-    #                         order by 4 asc"""
-    #     ea1 = str(int(item[1], 16))
-    #     ea2 = str(int(item[3], 16))
-    #     cur.execute(sql, (ea1, ea2))
-    #     rows = cur.fetchall()
-    #     if len(rows) != 2:
-    #         log.warning("Sorry, there is no assembly available for either the first or the second database.")
-    #     else:
-    #         row1 = rows[0]
-    #         row2 = rows[1]
-
-    #         html_diff = CHtmlDiff()
-    #         asm1 = self.prettify_asm(row1["assembly"])
-    #         asm2 = self.prettify_asm(row2["assembly"])
-    #         buf1 = "%s proc near\n%s\n%s endp" % (row1["name"], asm1, row1["name"])
-    #         buf2 = "%s proc near\n%s\n%s endp" % (row2["name"], asm2, row2["name"])
-    #         src = html_diff.make_file(buf1.split("\n"), buf2.split("\n"))
-
-    #         title = "Diff assembler %s - %s" % (row1["name"], row2["name"])
-    #         cdiffer = CHtmlViewer()
-    #         cdiffer.Show(src, title)
-
-    #     cur.close()
-
     def import_one(self, item):
         # Import all the type libraries from the diff database
         self.import_til()
@@ -610,36 +574,36 @@ class CIDABinDiff(diaphora.CBinDiff):
         finally:
             cur.close()
 
-    def do_import_one(self, ea1, ea2, force = False):
-        cur = self.db_cursor()
-        sql = "select prototype, comment, mangled_function, function_flags from diff.functions where address = ?"
-        cur.execute(sql, (ea2,))
-        row = cur.fetchone()
-        if row is not None:
-            proto = row["prototype"]
-            comment = row["comment"]
-            name = row["mangled_function"]
-            flags = row["function_flags"]
+    # def do_import_one(self, ea1, ea2, force = False):
+    #     cur = self.db_cursor()
+    #     sql = "select prototype, comment, mangled_function, function_flags from diff.functions where address = ?"
+    #     cur.execute(sql, (ea2,))
+    #     row = cur.fetchone()
+    #     if row is not None:
+    #         proto = row["prototype"]
+    #         comment = row["comment"]
+    #         name = row["mangled_function"]
+    #         flags = row["function_flags"]
 
-            ea1 = int(ea1)
-            if not name.startswith("sub_") or force:
-                if not MakeNameEx(ea1, name, SN_NOWARN|SN_NOCHECK):
-                    for i in xrange(10):
-                        if MakeNameEx(ea1, "%s_%d" % (name, i), SN_NOWARN|SN_NOCHECK):
-                            break
+    #         ea1 = int(ea1)
+    #         if not name.startswith("sub_") or force:
+    #             if not MakeNameEx(ea1, name, SN_NOWARN|SN_NOCHECK):
+    #                 for i in xrange(10):
+    #                     if MakeNameEx(ea1, "%s_%d" % (name, i), SN_NOWARN|SN_NOCHECK):
+    #                         break
 
-            if proto is not None and proto != "int()":
-                SetType(ea1, proto)
+    #         if proto is not None and proto != "int()":
+    #             SetType(ea1, proto)
 
-            if comment is not None and comment != "":
-                SetFunctionCmt(ea1, comment, 1)
+    #         if comment is not None and comment != "":
+    #             SetFunctionCmt(ea1, comment, 1)
 
-            if flags is not None:
-                SetFunctionFlags(ea1, flags)
+    #         if flags is not None:
+    #             SetFunctionFlags(ea1, flags)
 
-            self.import_instruction_level(ea1, ea2, cur)
+    #         self.import_instruction_level(ea1, ea2, cur)
 
-        cur.close()
+    #     cur.close()
 
     # def import_selected(self, items, selected):
     #     # Import all the type libraries from the diff database
@@ -1570,13 +1534,64 @@ def _gen_diaphora_db(
     if r2:
         r2_close()
 
-if __name__ == "__main__":
-    if len(sys.argv) == 2:
-        hash = ""
-        with open(sys.argv[1], "rb") as f:
-            d = f.read()
-            hash = sha256(d).hexdigest();
+def dbname_for_file(filepath):
+    hash = ""
+    with open(filepath, "rb") as f:
+        d = f.read()
+        hash = sha256(d).hexdigest();
+    return hash
 
-        _gen_diaphora_db(sys.argv[1], hash)
+def generate_db_for_file(filepath, override_if_existing = False):
+    hash = dbname_for_file(filepath)
+    _gen_diaphora_db(filepath, hash)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "file1",
+        nargs=1,
+        help='File to analyze'
+    )
+    parser.add_argument(
+        "file2",
+        nargs="?",
+        default=None,
+        help='(Optional) File to diff against'
+    )
+    parser.add_argument(
+        "-f",
+        dest='force_db_override',
+        action='store_true',
+        help='Force DB override'
+    )
+
+    args = parser.parse_args()
+    args.file1 = args.file1[0]
+
+    db1name = dbname_for_file(args.file1)
+    bd = diaphora.CBinDiff(db1name)
+
+    if args.force_db_override or not bd.db_exists(db1name):
+        generate_db_for_file(args.file1)
     else:
-        print(f"Usage: {sys.argv[0]} <sample>")
+        print(f"[*] DB {db1name} already exists. Nothing to do.")
+
+    if args.file2:
+        db2name = dbname_for_file(args.file2)
+
+        if args.force_db_override or not bd.db_exists(db1name):
+            print(f"[*] Generating DB for {args.file1}")
+            generate_db_for_file(args.file1)
+        else:
+            print(f"[*] DB {db1name} for file {args.file1} already exists. Skipping...")
+
+        if args.force_db_override or not bd.db_exists(db2name):
+            print(f"[*] Generating DB for {args.file2}")
+            generate_db_for_file(args.file2)
+        else:
+            print(f"[*] DB {db2name} for file {args.file2} already exists. Skipping...")
+
+        bd.open_db()
+        bd.diff(db2name)
+        matches = bd.get_results()
+        HtmlResults(matches, file1=args.file1, file2=args.file2).render("matches.html")

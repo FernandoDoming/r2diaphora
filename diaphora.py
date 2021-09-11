@@ -182,7 +182,7 @@ class CChooser():
 
 #-------------------------------------------------------------------------------
 MAX_PROCESSED_ROWS = 1000000
-TIMEOUT_LIMIT = 60 * 3
+TIMEOUT_LIMIT = 60 * 5
 
 #-------------------------------------------------------------------------------
 class bytes_encoder(json.JSONEncoder):
@@ -298,12 +298,29 @@ class CBinDiff:
       self.create_indexes()
       self.db.commit()
 
+  def db_exists(self, dbname):
+    try:
+      db_attrs = get_db_attrs()
+      db = mysql.connector.connect(
+        user=db_attrs["user"], password=db_attrs["password"],
+        host=db_attrs["host"], database=dbname
+      )
+      return True
+    except mysql.connector.errors.ProgrammingError:
+      return False
+
+  def interrupt(self):
+    cur = self.db_cursor()
+    cur.execute("show processlist")
+    procs = cur.fetchall()
+    for proc in filter(lambda p: p.get("Command") == "Query", procs):
+      cur.execute(f"kill {proc['Id']}")
+    cur.close()
+
   def get_db(self):
     tid = threading.current_thread().ident
     if not tid in self.dbs_dict:
       self.open_db()
-      if self.last_diff_db is not None:
-        self.attach_database(self.last_diff_db)
     return self.dbs_dict[tid]
 
   def db_cursor(self):
@@ -316,7 +333,10 @@ class CBinDiff:
       self.dbs_dict[tid].close()
       del self.dbs_dict[tid]
     if isinstance(threading.current_thread(), threading._MainThread):
-      self.db.close()
+      try:
+        self.db.close()
+      except:
+        pass
 
   def create_schema(self):
     cur = self.db_cursor()
@@ -454,6 +474,12 @@ class CBinDiff:
   def create_indexes(self):
     cur = self.db_cursor()
 
+    sql = "create index if not exists idx_address on functions(address)"
+    cur.execute(sql)
+
+    sql = "create index if not exists idx_rva on functions(rva)"
+    cur.execute(sql)
+
     sql = "create index if not exists idx_assembly on functions(assembly)"
     cur.execute(sql)
 
@@ -554,6 +580,9 @@ class CBinDiff:
     # cur.execute(sql)
 
     sql = "create index if not exists idx_instructions_address on instructions (address)"
+    cur.execute(sql)
+
+    sql = "create index if not exists idx_address on basic_blocks (address)"
     cur.execute(sql)
 
     sql = "create index if not exists idx_bb_relations on bb_relations(parent_id, child_id)"
@@ -1157,7 +1186,10 @@ class CBinDiff:
             do_cancel = True
             try:
               log_refresh("Timeout, cancelling queries...")
-              self.get_db().interrupt()
+              self.interrupt()
+              for i, t in enumerate(threads_list):
+                if t.is_alive():
+                  t.kill()
             except:
               print(("database.interrupt(): %s" % str(sys.exc_info()[1])))
 
@@ -2003,20 +2035,33 @@ class CBinDiff:
     self.unmatched_second = self.chooser("Unmatched in secondary", self, False)
     self.unmatched_primary = self.chooser("Unmatched in primary", self, False)
 
+  def result_tuple_to_dict(self, tuple):
+    return {
+        "line": tuple[0],
+        "address": tuple[1],
+        "name": tuple[2],
+        "address2": tuple[3],
+        "name2": tuple[4],
+        "ratio": tuple[5],
+        "bb1": tuple[6],
+        "bb2": tuple[7],
+        "description": tuple[8]
+    }
+
   def get_results(self):
     matches = []
     for item in self.best_chooser.items:
-      m = result_tuple_to_dict(item)
+      m = self.result_tuple_to_dict(item)
       m["type"] = "best"
       matches.append(m)
 
     for item in self.partial_chooser.items:
-      m = result_tuple_to_dict(item)
+      m = self.result_tuple_to_dict(item)
       m["type"] = "partial"
       matches.append(m)
 
     for item in self.unreliable_chooser.items:
-      m = result_tuple_to_dict(item)
+      m = self.result_tuple_to_dict(item)
       m["type"] = "unreliable"
       matches.append(m)
 
