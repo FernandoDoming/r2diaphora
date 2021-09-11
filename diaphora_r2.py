@@ -1571,7 +1571,8 @@ if __name__ == "__main__":
     db1name = dbname_for_file(args.file1)
     bd = diaphora.CBinDiff(db1name)
 
-    if args.force_db_override or not bd.db_exists(db1name):
+    if args.force_db_override or not diaphora.db_exists(db1name):
+        print(f"[*] Generating {db1name} DB for {args.file1}")
         generate_db_for_file(args.file1)
     else:
         print(f"[*] DB {db1name} already exists. Nothing to do.")
@@ -1579,13 +1580,13 @@ if __name__ == "__main__":
     if args.file2:
         db2name = dbname_for_file(args.file2)
 
-        if args.force_db_override or not bd.db_exists(db1name):
+        if args.force_db_override or not diaphora.db_exists(db1name):
             print(f"[*] Generating DB for {args.file1}")
             generate_db_for_file(args.file1)
         else:
             print(f"[*] DB {db1name} for file {args.file1} already exists. Skipping...")
 
-        if args.force_db_override or not bd.db_exists(db2name):
+        if args.force_db_override or not diaphora.db_exists(db2name):
             print(f"[*] Generating DB for {args.file2}")
             generate_db_for_file(args.file2)
         else:

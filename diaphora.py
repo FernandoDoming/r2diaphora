@@ -117,6 +117,24 @@ def get_db_attrs():
   return j
 
 #-------------------------------------------------------------------------------
+def db_exists(dbname):
+    exists = False
+    try:
+      db_attrs = get_db_attrs()
+      db = mysql.connector.connect(
+        user=db_attrs["user"], password=db_attrs["password"],
+        host=db_attrs["host"], database=dbname
+      )
+      c = db.cursor(dictionary=True, buffered=True)
+      c.execute("SELECT * from functions LIMIT 1")
+      row = c.fetchone()
+      exists = row is not None
+      c.close()
+      db.close()
+      return exists
+    except mysql.connector.errors.ProgrammingError:
+      return exists
+#-------------------------------------------------------------------------------
 class CChooser():
   class Item:
     def __init__(self, ea, name, ea2 = None, name2 = None, desc="100% equal", ratio = 0, bb1 = 0, bb2 = 0):
@@ -297,17 +315,6 @@ class CBinDiff:
       self.create_schema()
       self.create_indexes()
       self.db.commit()
-
-  def db_exists(self, dbname):
-    try:
-      db_attrs = get_db_attrs()
-      db = mysql.connector.connect(
-        user=db_attrs["user"], password=db_attrs["password"],
-        host=db_attrs["host"], database=dbname
-      )
-      return True
-    except mysql.connector.errors.ProgrammingError:
-      return False
 
   def interrupt(self):
     cur = self.db_cursor()
