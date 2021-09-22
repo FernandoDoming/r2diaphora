@@ -1,3 +1,4 @@
+import magic
 from yattag import Doc
 from hashlib import sha256
 
@@ -22,6 +23,10 @@ class HtmlResults():
             d = f.read()
             hash = sha256(d).hexdigest();
         return hash
+
+    def get_file_magic(self, file):
+        m = magic.Magic()
+        return m.from_file(file)
 
     def interpolate_color(self, color_a, color_b, alpha):
         # color_a and color_b should be tuples of 3 ints
@@ -75,21 +80,18 @@ class HtmlResults():
                 doc.stag("link", rel="stylesheet", href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css")
 
             with tag("body", style="margin: 50px; background-color: #303538; color: white;"):
-                if self.file1:
-                    with tag("div", klass="row"):
-                        with tag("div", klass="col-md-12"):
-                            with tag("p", klass="code"):
-                                text(f"File 1: {self.file1}")
-                                doc.stag("br")
-                                text(f"SHA256: {self.get_file_hash(self.file1)}")
+                for i, f in enumerate([self.file1, self.file2]):
+                    if not f:
+                        continue
 
-                if self.file2:
                     with tag("div", klass="row"):
                         with tag("div", klass="col-md-12"):
                             with tag("p", klass="code"):
-                                text(f"File 2: {self.file2}")
+                                text(f"File {i + 1}: {f}")
                                 doc.stag("br")
-                                text(f"SHA256: {self.get_file_hash(self.file2)}")
+                                text(f"Type: {self.get_file_magic(f)}")
+                                doc.stag("br")
+                                text(f"SHA256: {self.get_file_hash(f)}")
 
                 with tag("h5"):
                     text(f"Found {len(self.results)} matches across compared files")
