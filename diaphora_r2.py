@@ -185,7 +185,7 @@ g_bindiff = None
 class CIDABinDiff(diaphora.CBinDiff):
     def __init__(self, db_name: str = ""):
         diaphora.CBinDiff.__init__(self, db_name)
-        self.names = []
+        self.names = Names()
         self.min_ea = MinEA()
         self.max_ea = MaxEA()
 
@@ -896,10 +896,7 @@ class CIDABinDiff(diaphora.CBinDiff):
                 tmp_name = None
                 if op_value != BADADDR and op_value in self.names:
                     tmp_name = self.names[op_value]
-                    demangled_name = Demangle(tmp_name, INF_SHORT_DN)
-                    if demangled_name is not None:
-                        tmp_name = demangled_name
-                    if not tmp_name.startswith("sub_"):
+                    if not tmp_name.startswith("fcn."):
                         names.add(tmp_name)
 
                 l = list(CodeRefsFrom(x, 0))

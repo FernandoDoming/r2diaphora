@@ -186,9 +186,35 @@ def CodeRefsFrom(x, _):
 def DataRefsFrom(x):
     return log_exec_r2_cmdj(f"axfj @ {x}")
 
-def GetOperandValue(x, y):
-    # TODO XXX
-    return 0
+def GetOperandValue(ea, n):
+    # Get number used in the operand
+    # This function returns an immediate number used in the operand
+
+    #     Parameters:
+    # ea - linear address of instruction
+    # n - the operand number
+    #     Returns:
+    # value operand is an immediate value => immediate value
+    # operand has a displacement => displacement 
+    # operand is a direct memory ref => memory address 
+    # operand is a register => register number 
+    # operand is a register phrase => phrase number 
+    # otherwise => -1
+
+    _in = log_exec_r2_cmdj(f"aoj 1 @ {ea}")
+    try:
+        op = _in[0]["opex"]["operands"][n]
+    except (KeyError, IndexError):
+        return -1
+
+    if op["type"] == "imm":
+        return op["value"]
+    elif op["type"] == "reg":
+        return -1
+    elif op["type"] == "mem":
+        return op["disp"]
+    else:
+        return -1
 
 #-----------------------------------------------------------------------
 def r2_get_imagebase():
@@ -360,13 +386,10 @@ def Functions(filter_lambda=None):
 
 #-----------------------------------------------------------------------
 def Names():
-    # TODO: Return a dictionary with {"name_of_thing":0xaddress}
-    #
-    # Example: {"main": 0x401000, "foo":0x4010200, "global_var": 0x402010}
+    # Return a dictionary with {address: nameofthing}
     res = {}
-    for flag in log_exec_r2_cmd("f").split("\n"):
-        w = flag.split(" ")
-        res[w[2]] = w[0]
+    for flag in log_exec_r2_cmdj("fj"):
+        res[flag["offset"]] = flag["name"]
     return res
 
 #-----------------------------------------------------------------------
