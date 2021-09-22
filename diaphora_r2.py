@@ -28,7 +28,6 @@ import json
 import decimal
 import difflib
 import threading
-import argparse
 import logging
 from logging.handlers import RotatingFileHandler
 from hashlib import md5, sha256
@@ -1541,11 +1540,19 @@ def dbname_for_file(filepath):
         hash = sha256(d).hexdigest();
     return hash
 
-def generate_db_for_file(filepath, override_if_existing = False):
-    hash = dbname_for_file(filepath)
-    _gen_diaphora_db(filepath, hash)
+def generate_db_for_file(filepath, override_if_existing = False, function_filter = None):
+    dbname = dbname_for_file(filepath)
+    if diaphora.db_exists(dbname) and override_if_existing:
+        log.info(f"Dropping database {dbname} as it was specified to override it")
+        diaphora.drop_db(dbname)
+    
+    if not diaphora.db_exists(dbname):
+        log.info(f"Generating database {dbname} for file {filepath}")
+        _gen_diaphora_db(filepath, dbname, function_filter=function_filter)
+
 
 if __name__ == "__main__":
+    import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "file1",
@@ -1577,26 +1584,11 @@ if __name__ == "__main__":
     db1name = dbname_for_file(args.file1)
     bd = diaphora.CBinDiff(db1name)
 
-    if args.force_db_override or not diaphora.db_exists(db1name):
-        print(f"[*] Generating {db1name} DB for {args.file1}")
-        generate_db_for_file(args.file1)
-    else:
-        print(f"[*] DB {db1name} already exists. Nothing to do.")
+    generate_db_for_file(args.file1, override_if_existing=args.force_db_override)
 
     if args.file2:
         db2name = dbname_for_file(args.file2)
-
-        if args.force_db_override or not diaphora.db_exists(db1name):
-            print(f"[*] Generating DB for {args.file1}")
-            generate_db_for_file(args.file1)
-        else:
-            print(f"[*] DB {db1name} for file {args.file1} already exists. Skipping...")
-
-        if args.force_db_override or not diaphora.db_exists(db2name):
-            print(f"[*] Generating DB for {args.file2}")
-            generate_db_for_file(args.file2)
-        else:
-            print(f"[*] DB {db2name} for file {args.file2} already exists. Skipping...")
+        generate_db_for_file(args.file2, override_if_existing=args.force_db_override)
 
         bd.open_db()
         bd.diff(db2name)
