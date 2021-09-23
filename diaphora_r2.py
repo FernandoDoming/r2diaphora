@@ -751,6 +751,8 @@ class CIDABinDiff(diaphora.CBinDiff):
     def read_function(self, f, discard=False):
         log.debug(f"READ F {f}")
 
+        name = ""
+        true_name = ""
         try:
             name_info = log_exec_r2_cmdj(f"fd.j @ {f}")[0]
             name = name_info.get("name")
@@ -759,6 +761,9 @@ class CIDABinDiff(diaphora.CBinDiff):
             demangled_name = name #r2.cmdj(f"isj. @ {f}").get("name", "")
             #if demangled_name != "":
             #    name = demangled_name
+            if name.startswith("section..") or name.startswith("sym.imp."):
+                return False
+
         except Exception:
             log.exception(f"Could not read function name for address {f}")
 
@@ -768,15 +773,10 @@ class CIDABinDiff(diaphora.CBinDiff):
         flow = log_exec_r2_cmdj(f"afbj @ {f}")
         size = 0
 
-        if not self.ida_subs:
-            # Unnamed function, ignore it...
-            if name.startswith("sub.") or name.startswith("unk."):
-                return False
-
-            # TODO Already recognized runtime's function?
-            #flags = GetFunctionFlags(f)
-            #if flags & FUNC_LIB or flags == -1:
-            #    return False
+        # TODO Already recognized runtime's function?
+        #flags = GetFunctionFlags(f)
+        #if flags & FUNC_LIB or flags == -1:
+        #    return False
 
         #if self.exclude_library_thunk:
             # Skip library and thunk functions
@@ -1563,17 +1563,40 @@ if __name__ == "__main__":
         help="Diff output file (HTML) - Default value: <db1name>_vs_<db2name>.html"
     )
 
+    parser.add_argument(
+        "-a",
+        dest='analyze_all',
+        action='store_true',
+        help="Analyze ALL functions (by default library functions are skipped)"
+    )
+
     args = parser.parse_args()
     args.file1 = args.file1[0]
 
     db1name = dbname_for_file(args.file1)
     bd = diaphora.CBinDiff(db1name)
 
-    generate_db_for_file(args.file1, override_if_existing=args.force_db_override)
+    fn_filter = lambda fn: (
+        not fn["name"].startswith("sym.imp.") and
+        not fn["name"].startswith("flirt.") and
+        not fn["name"].startswith("section..")
+    )
+    if args.analyze_all:
+        fn_filter = None
+
+    generate_db_for_file(
+        args.file1,
+        override_if_existing=args.force_db_override,
+        function_filter=fn_filter
+    )
 
     if args.file2:
         db2name = dbname_for_file(args.file2)
-        generate_db_for_file(args.file2, override_if_existing=args.force_db_override)
+        generate_db_for_file(
+            args.file2,
+            override_if_existing=args.force_db_override,
+            function_filter=fn_filter
+        )
 
         bd.open_db()
         bd.diff(db2name)
