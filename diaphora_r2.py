@@ -1508,12 +1508,18 @@ def remove_file(filename):
     print("Remove file %s" % (filename))
 
 #-----------------------------------------------------------------------
+def scan_libs():
+    dirname  = os.path.dirname(__file__)
+    sigs_dir = os.path.join(dirname, "signatures", "flirt")
+    log_exec_r2_cmd(f"zfs {sigs_dir}/*.sig")
+
 def _gen_diaphora_db(
         input_path: str, out_db: str, function_filter = None):
     global r2
     if not r2:
         r2_open(input_path)
 
+    scan_libs()
     _diff_or_export(function_filter, dbname=out_db)
     if r2:
         r2_close()
@@ -1577,9 +1583,7 @@ if __name__ == "__main__":
     bd = diaphora.CBinDiff(db1name)
 
     fn_filter = lambda fn: (
-        not fn["name"].startswith("sym.imp.") and
-        not fn["name"].startswith("flirt.") and
-        not fn["name"].startswith("section..")
+        not fn["name"].startswith("flirt.")
     )
     if args.analyze_all:
         fn_filter = None
