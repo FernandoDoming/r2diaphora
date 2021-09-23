@@ -114,11 +114,6 @@ def timeout(s):
 
 #-----------------------------------------------------------------------
 g_bindiff = None
-# def show_choosers():
-#     global g_bindiff
-#     if g_bindiff is not None:
-#         g_bindiff.show_choosers(True)
-
 
 # #-----------------------------------------------------------------------
 # def import_definitions():
@@ -866,13 +861,6 @@ class CIDABinDiff(diaphora.CBinDiff):
                     continue
 
                 _in = ins[0]
-                # if _in["opex"]["operands"][0]["type"] in ["mem", "imm", "far", "near", "displ"]:
-                #    decoded_size -= ins.Operands[0].offb
-                # if _in["opex"]["operands"][1]["type"] in ["mem", "imm", "far", "near", "displ"]:
-                #    decoded_size -= ins.Operands[1].offb
-                # if decoded_size <= 0:
-                #    decoded_size = 1
-
                 for oper in _in.get("opex", {}).get("operands", []):
                     if oper["type"] == "imm":
                         if self.is_constant(oper, x) and self.constant_filter(oper["value"]):

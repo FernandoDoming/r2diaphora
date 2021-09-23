@@ -174,7 +174,7 @@ def GetString(ea, lenght, type):
 
 #-----------------------------------------------------------------------
 def CodeRefsTo(x, _):
-    # TODO: Return a list of code references to address 'x'. The value 'y',
+    # Return a list of code references to address 'x'. The value 'y',
     # in IDA, is used to consider the previous instruction (y=1) as a valid
     # code reference or if it should be ignored (y=0).
     return map(int16, log_exec_r2_cmd('axtq.@ %s'%(x)).split('\n'))
@@ -225,7 +225,7 @@ def r2_get_imagebase():
 
 #-----------------------------------------------------------------------
 def r2_get_idp_name():
-    # TODO: idaapi.get_idp_name() returns the current processor (CPU arch)
+    # idaapi.get_idp_name() returns the current processor (CPU arch)
     # of the opened binary.
     return log_exec_r2_cmd('ij~{core.arch}')
     #return r2.cmd('e asm.arch')
@@ -256,7 +256,7 @@ def GetInstructionList():
 
 #-----------------------------------------------------------------------
 def Heads(startEA, endEA):
-    # TODO: Return a list with all the instructions between 'startEA', the
+    # Return a list with all the instructions between 'startEA', the
     # start address, and 'endEA', the end address.
     res = log_exec_r2_cmd(f"pid {endEA - startEA} @ {startEA}~[0]")
     return map(int16, res.split("\n"))
@@ -294,7 +294,7 @@ def GetFunctionFlags(fcn):
 
 #-----------------------------------------------------------------------
 def GuessType(ea):
-    # TODO: It should return the guessed type of the current function.
+    # It should return the guessed type of the current function.
     #
     # For example: for a strcpy like function, it should return a prototype
     # like:
@@ -350,7 +350,7 @@ def MinEA():
         return ea
 
 def MaxEA():
-    # TODO: Return the maximum (read, last) address in the database.
+    # Return the maximum (read, last) address in the database.
     # For example, if the last segment in the program being analysed does
     # end at 0x401FFF, then, that's the maximum address.
 
