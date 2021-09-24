@@ -29,7 +29,6 @@ class ctree_visitor_t():
     def apply_to(self, item, parent):
         pass
 
-
 #-------------------------------------------------------------------------------
 class CAstVisitor(ctree_visitor_t):
   def __init__(self, cfunc):
@@ -104,6 +103,10 @@ def test_addr_within_function(f, ea):
         return False
 
     return ea >= fn["offset"] and ea <= (fn["offset"] + fn["size"])
+
+#-----------------------------------------------------------------------
+def get_arch():
+    return log_exec_r2_cmdj("ij").get("bin", {}).get("arch")
 
 #-----------------------------------------------------------------------
 def block_succs(addr):

@@ -1316,7 +1316,7 @@ def _diff_or_export(function_filter = None, dbname = None, userdata = "", **opti
 
     try:
         bd = CIDABinDiff(opts.file_out)
-        bd.use_decompiler_always = True #opts.use_decompiler
+        bd.use_decompiler_always = (get_arch() != "sh")
         bd.exclude_library_thunk = opts.exclude_library_thunk
         bd.unreliable = opts.unreliable
         bd.slow_heuristics = opts.slow
