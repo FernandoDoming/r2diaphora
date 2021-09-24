@@ -295,7 +295,7 @@ HEURISTICS.append({
               from $MAIN$.functions f,
                    $DIFF$.functions df
              where df.rva = f.rva
-               %POSTFIX%""",
+               $POSTFIX$""",
   "min":0.7,
   "flags":HEUR_FLAG_NONE
 })
