@@ -1514,13 +1514,17 @@ def scan_libs():
     log_exec_r2_cmd(f"zfs {sigs_dir}/*.sig")
 
 def _gen_diaphora_db(
-        input_path: str, out_db: str, function_filter = None):
+        input_path: str,
+        out_db: str,
+        function_filter = None,
+        userdata = ""
+    ):
     global r2
     if not r2:
         r2_open(input_path)
 
     scan_libs()
-    _diff_or_export(function_filter, dbname=out_db)
+    _diff_or_export(function_filter, dbname=out_db, userdata=userdata)
     if r2:
         r2_close()
 
@@ -1611,3 +1615,4 @@ if __name__ == "__main__":
         else:
             output_name = f"{db1name[0:10]}_vs_{db2name[0:10]}.html"
         HtmlResults(matches, file1=args.file1, file2=args.file2).render(output_name)
+        print(f"[+] Diff saved to {output_name}")
