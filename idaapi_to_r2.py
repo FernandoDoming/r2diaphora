@@ -98,7 +98,7 @@ def is_func(ea):
     return bool(log_exec_r2_cmdj(f"fd.j @ {ea}"))
 
 def test_addr_within_function(f, ea):
-    fn = next(filter(lambda fn: fn["offset"] == f, get_all_fns()), None)
+    fn = get_func(f)
     if not fn:
         return False
 
@@ -129,7 +129,7 @@ def block_succs(addr):
     return res
 
 def block_preds(addr):
-    res = []
+    res = set()
     try:
         bbs = log_exec_r2_cmdj("afbj @ %s"%(addr))
     except Exception:
@@ -139,18 +139,11 @@ def block_preds(addr):
     if not bbs:
         log.warn("EMPTY BB LIST FOR %s"%(addr))
         return res
+
     for bb in bbs:
-        try:
-            if +bb["jump"] == addr:
-                res.push (+bb["addr"])
-        except Exception:
-            pass
-        try:
-            if +bb["fail"] == addr:
-                res.push (+bb["addr"])
-        except Exception:
-            pass
-    return res
+        if bb.get("jump") == addr or bb.get("fail") == addr:
+            res.add(bb["addr"])
+    return list(res)
 
 def GetMaxLocalType():
     # It's used, in IDA, to return the total number of structs, enums and
@@ -180,11 +173,18 @@ def CodeRefsTo(x, _):
     # Return a list of code references to address 'x'. The value 'y',
     # in IDA, is used to consider the previous instruction (y=1) as a valid
     # code reference or if it should be ignored (y=0).
-    return map(int16, log_exec_r2_cmd('axtq.@ %s'%(x)).split('\n'))
+    xrefs = log_exec_r2_cmd(f"axtq. @ {x}").strip()
+    if xrefs == "":
+        return []
+
+    return [int16(xref) for xref in xrefs.split("\n")]
 
 def CodeRefsFrom(x, _):
-    # ???
-    return map(int16, log_exec_r2_cmd(f"axfq. @ {x}").split('\n'))
+    xrefs = log_exec_r2_cmd(f"axfq. @ {x}").strip()
+    if xrefs == "":
+        return []
+
+    return [int16(xref) for xref in xrefs.split("\n")]
 
 def DataRefsFrom(x):
     return log_exec_r2_cmdj(f"axfj @ {x}")
@@ -246,11 +246,15 @@ def decompile(ea):
 def get_func(ea):
     # In IDA, it should return a "function object". Mostly specific to get
     # the start and end address, as well as the size, etc...
-    fns = log_exec_r2_cmdj(f"afij @ {ea}")
-    if fns and len(fns) > 0:
-        return fns[0]
-    else:
-        return None
+
+    # fns = log_exec_r2_cmdj(f"afij @ {ea}")
+    # if fns and len(fns) > 0:
+    #     return fns[0]
+    # else:
+    #     return None
+
+    # afi is slow, this method is faster, even it does not look like it
+    return next(filter(lambda fn: fn["offset"] == ea, get_all_fns()), {})
 
 #-----------------------------------------------------------------------
 def GetInstructionList():
@@ -258,11 +262,13 @@ def GetInstructionList():
     return CPU_INSTRUCTIONS.get(arch, [])
 
 #-----------------------------------------------------------------------
-def Heads(startEA, endEA):
-    # Return a list with all the instructions between 'startEA', the
-    # start address, and 'endEA', the end address.
-    res = log_exec_r2_cmd(f"pid {endEA - startEA} @ {startEA}~[0]")
-    return map(int16, res.split("\n"))
+def Heads(ea, size):
+    # res = log_exec_r2_cmd(f"pid {size} @ {ea}~[0]").strip()
+    # addrs = filter(None, [int16(x) for x in res.split("\n")])
+    # # Remove duplicates
+    # return list(dict.fromkeys(addrs))
+    ops = log_exec_r2_cmdj(f"aoj {size} @ {ea}")
+    return [op["addr"] for op in ops]
 
 def GetCommentEx(x, type):
     return log_exec_r2_cmd("CC.@ %s"%(x))
@@ -374,7 +380,7 @@ def GetDisasm(x):
     return log_exec_r2_cmd('pi 1 @ %s'%(x))
 
 def ItemSize(x):
-    return int(log_exec_r2_cmd('ao~size[1]'), 16)
+    return log_exec_r2_cmdj(f"aoj 1 @ {x}")[0].get("size", -1)
 
 #-----------------------------------------------------------------------
 def Functions(filter_lambda=None):

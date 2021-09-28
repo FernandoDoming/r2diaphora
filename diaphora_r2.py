@@ -741,7 +741,8 @@ class CIDABinDiff(diaphora.CBinDiff):
     def is_constant(self, oper, ea):
         value = oper["value"]
         # make sure, its not a reference but really constant
-        if value in DataRefsFrom(ea):
+        drefs = [d.get("to", -1) for d in DataRefsFrom(ea)]
+        if value in drefs:
             return False
 
         return True
@@ -770,8 +771,9 @@ class CIDABinDiff(diaphora.CBinDiff):
         # WTF
         f = int(f)
 
+        fninfo = get_func(f)
         flow = log_exec_r2_cmdj(f"afbj @ {f}")
-        size = 0
+        size = fninfo.get("size", 0)
 
         # TODO Already recognized runtime's function?
         #flags = GetFunctionFlags(f)
@@ -825,10 +827,10 @@ class CIDABinDiff(diaphora.CBinDiff):
         log.debug(f"Fn {name} - Starting block iteration")
         for block in flow:
             nodes += 1
-            block_startEA = +block['addr'];
-            block_endEA = +block['addr'] + +block['size'];
-            block.update({'startEA': block_startEA})
-            block.update({'endEA': block_endEA})
+            block_startEA = +block["addr"];
+            block_endEA = +block["addr"] + +block["size"];
+            block.update({"startEA": block_startEA})
+            block.update({"endEA": block_endEA})
             instructions_data = []
 
             block_ea = block_startEA - image_base
@@ -836,14 +838,13 @@ class CIDABinDiff(diaphora.CBinDiff):
             bb_topological[idx] = []
             bb_topo_num[block_ea] = idx
 
-            for x in list(Heads(block_startEA, block_endEA)):
+            for x in list(Heads(block["addr"], block["ninstr"])):
                 mnem = GetMnem(x)
                 disasm = GetDisasm(x)
-                size += ItemSize(x)
                 instructions += 1
 
                 if mnem in cpu_ins_list:
-                    mnemonics_spp += self.primes[cpu_ins_list.index(mnem)]
+                    mnemonics_spp *= self.primes[cpu_ins_list.index(mnem)]
 
                 try:
                     assembly[block_ea].append(disasm)
@@ -857,25 +858,23 @@ class CIDABinDiff(diaphora.CBinDiff):
                             assembly[block_ea] = ["loc_%s:" % x, disasm]
 
                 decoded_size, ins = diaphora_decode(x)
-                if decoded_size == 0:
+                if len(ins) < 1:
                     continue
+                ins = ins[0]
 
-                _in = ins[0]
-                for oper in _in.get("opex", {}).get("operands", []):
+                for oper in ins.get("opex", {}).get("operands", []):
                     if oper["type"] == "imm":
                         if self.is_constant(oper, x) and self.constant_filter(oper["value"]):
                             constants.append(oper["value"])
 
-                curr_bytes = GetManyBytes(x, decoded_size, False)
-                if curr_bytes is None or len(curr_bytes) != decoded_size:
-                    log.error("Failed to read %s bytes at [%s]" % (decoded_size, x))
-                    continue
+                mnem_bytes = ins["bytes"][0:ins["mask"].rfind("f") + 1]
+                curr_bytes = bytes.fromhex(mnem_bytes)
 
                 bytes_hash.append(curr_bytes)
                 bytes_sum += sum(curr_bytes)
 
-                function_hash.append(GetManyBytes(x, ItemSize(x), False))
-                outdegree += len(list(CodeRefsFrom(x, 0)))
+                function_hash.append(bytes.fromhex(ins["bytes"]))
+                outdegree += len(CodeRefsFrom(x, 0))
                 mnems.append(mnem)
                 op_value = GetOperandValue(x, 1)
                 if op_value == -1:
@@ -907,7 +906,9 @@ class CIDABinDiff(diaphora.CBinDiff):
                 # bb in degree, out degree
                 bb_degree[block_ea] = [0, 0]
 
-            for succ_block in block_succs(block_startEA):
+            succs = block_succs(block_startEA)
+            preds = block_preds(block_startEA)
+            for succ_block in succs:
                 succ_base = succ_block - image_base #.startEA - image_base
                 bb_relations[block_ea].append(succ_base)
                 bb_degree[block_ea][1] += 1
@@ -921,11 +922,11 @@ class CIDABinDiff(diaphora.CBinDiff):
                 if succ_block not in dones:
                     dones[succ_block] = 1
 
-            for pred_block in block_preds(block_startEA):
+            for pred_block in preds:
                 try:
-                    bb_relations[pred_block - image_base].append(block.startEA - image_base)
+                    bb_relations[pred_block - image_base].append(block["startEA"] - image_base)
                 except KeyError:
-                    bb_relations[pred_block - image_base] = [block.startEA - image_base]
+                    bb_relations[pred_block - image_base] = [block["startEA"] - image_base]
 
                 edges += 1
                 outdegree += 1
@@ -934,9 +935,6 @@ class CIDABinDiff(diaphora.CBinDiff):
                 if pred_block not in dones:
                     dones[pred_block] = 1
 
-            for succ_block in block_succs(block_startEA):
-                succ_base = block_startEA - image_base
-                bb_topological[bb_topo_num[block_ea]].append(bb_topo_num[succ_base])
         log.debug(f"Fn {name} - Block iteration: {time.time() - s}s")
 
         sws = [f for f in flags if f["name"].startswith("switch.")]
@@ -950,6 +948,17 @@ class CIDABinDiff(diaphora.CBinDiff):
             cases = [f for f in flags if f["name"].startswith(f"case.0x{sw_ref}.")]
             cases_values = [case["name"].split(".")[-1] for case in cases]
             switches.append([len(cases), cases_values])
+
+        for block in flow:
+            block_ea = block["addr"] - image_base
+            for succ_block in block_succs(block["addr"]):
+                succ_base = succ_block - image_base
+                try:
+                    bb_topological[bb_topo_num[block_ea]].append(bb_topo_num[succ_base])
+                except KeyError:
+                    # tailcall functions will generate a KeyError as jump'ed BB is not
+                    # on function topology, but that's perfectly fine
+                    pass
 
         s = time.time()
         strongly_connected_spp = 0
