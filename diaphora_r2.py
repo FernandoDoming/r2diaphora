@@ -210,7 +210,7 @@ class CIDABinDiff(diaphora.CBinDiff):
     def do_export(self, function_filter = None, userdata = ""):
         callgraph_primes = 1
         callgraph_all_primes = {}
-        func_list = list(Functions(function_filter))
+        func_list = Functions(function_filter)
         total_funcs = len(func_list)
         t = time.time()
 
@@ -223,6 +223,7 @@ class CIDABinDiff(diaphora.CBinDiff):
             log.debug("PROPS FOR FUNC cur %s" % (func))
             props = self.read_function(func)
             if not props:
+                i += 1
                 continue
 
             ret = props[11]
@@ -763,6 +764,7 @@ class CIDABinDiff(diaphora.CBinDiff):
             #if demangled_name != "":
             #    name = demangled_name
             if name.startswith("section..") or name.startswith("sym.imp."):
+                log.info(f"Skipping uninteresting function {name}")
                 return False
 
         except Exception:
