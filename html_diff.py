@@ -5,11 +5,13 @@ from hashlib import sha256
 class HtmlResults():
 
     results = []
-    MATCHES_COLUMNS = ["name", "address", "name2", "address2", "ratio", "description"]
+    MATCHES_COLUMNS = ["type", "name", "address", "bb1", "name2", "address2", "bb2", "ratio", "description"]
     MATCHES_COLUMN_NAMES = {
         "address": "Address",
         "name2": "Name 2",
         "address2": "Address 2",
+        "bb1": "BB1",
+        "bb2": "BB2"
     }
 
     def __init__(self, results, file1 = None, file2 = None):
