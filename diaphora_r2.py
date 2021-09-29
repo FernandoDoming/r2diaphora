@@ -236,7 +236,12 @@ class CIDABinDiff(diaphora.CBinDiff):
 
             props = list(props)
             props[42] = userdata
-            self.save_function(props)
+            try:
+                self.save_function(props)
+            except Exception:
+                log.exception(f"Failed to save function {func}")
+                i += 1
+                continue
 
             i += 1
             line = "Exported %s fn (%d/%d). Elapsed %d s, remaining time ~%d s"

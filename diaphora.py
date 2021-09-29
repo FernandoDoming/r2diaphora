@@ -369,8 +369,8 @@ class CBinDiff:
 
         sql = """ create table if not exists functions (
                                                 id integer primary key auto_increment,
-                                                name text,
-                                                address integer,
+                                                name varchar(1024),
+                                                address bigint unsigned,
                                                 nodes integer,
                                                 edges integer,
                                                 indegree integer,
@@ -379,36 +379,36 @@ class CBinDiff:
                                                 instructions integer,
                                                 mnemonics mediumtext,
                                                 names text,
-                                                prototype text,
+                                                prototype varchar(1024),
                                                 cyclomatic_complexity integer,
                                                 primes_value integer,
                                                 comment text,
-                                                mangled_function text,
-                                                bytes_hash text,
+                                                mangled_function varchar(1024),
+                                                bytes_hash varchar(100),
                                                 pseudocode mediumtext,
                                                 pseudocode_lines integer,
-                                                pseudocode_hash1 varchar(256),
+                                                pseudocode_hash1 varchar(100),
                                                 pseudocode_primes integer,
                                                 function_flags integer,
                                                 assembly mediumtext,
-                                                prototype2 text,
-                                                pseudocode_hash2 varchar(256),
-                                                pseudocode_hash3 varchar(256),
+                                                prototype2 varchar(1024),
+                                                pseudocode_hash2 varchar(100),
+                                                pseudocode_hash3 varchar(100),
                                                 strongly_connected integer,
                                                 loops integer,
                                                 rva integer,
                                                 tarjan_topological_sort text,
-                                                strongly_connected_spp bigint,
+                                                strongly_connected_spp text,
                                                 clean_assembly mediumtext,
                                                 clean_pseudo mediumtext,
                                                 mnemonics_spp text,
                                                 switches text,
-                                                function_hash text,
+                                                function_hash varchar(100),
                                                 bytes_sum integer,
                                                 md_index double,
                                                 constants text,
                                                 constants_count integer,
-                                                segment_rva text,
+                                                segment_rva integer,
                                                 assembly_addrs text,
                                                 kgh_hash text,
                                                 userdata text) """
@@ -416,10 +416,10 @@ class CBinDiff:
 
         sql = """ create table if not exists program (
                                 id integer primary key auto_increment,
-                                callgraph_primes text,
-                                callgraph_all_primes text,
-                                processor text,
-                                md5sum text
+                                callgraph_primes varchar(4098),
+                                callgraph_all_primes varchar(4098),
+                                processor varchar(256),
+                                md5sum varchar(100)
                             ) """
         cur.execute(sql)
 
@@ -427,30 +427,30 @@ class CBinDiff:
                                 id integer primary key auto_increment,
                                 name varchar(255),
                                 type varchar(255),
-                                value text
+                                value varchar(255)
                             )"""
         cur.execute(sql)
 
-        sql = """ create table if not exists version (value text) """
+        sql = """ create table if not exists version (value varchar(100)) """
         cur.execute(sql)
 
         sql = """ create table if not exists instructions (
                                 id integer primary key auto_increment,
-                                address text,
-                                disasm text,
-                                mnemonic text,
-                                comment1 text,
-                                comment2 text,
+                                address bigint unsigned,
+                                disasm varchar(2048),
+                                mnemonic varchar(256),
+                                comment1 varchar(1024),
+                                comment2 varchar(1024),
                                 name text,
                                 type text,
-                                pseudocomment text,
+                                pseudocomment varchar(2048),
                                 pseudoitp integer) """
         cur.execute(sql)
 
         sql = """ create table if not exists basic_blocks (
                                 id integer primary key auto_increment,
                                 num integer,
-                                address text)"""
+                                address bigint unsigned)"""
         cur.execute(sql)
 
         sql = """ create table if not exists bb_relations (
@@ -474,14 +474,14 @@ class CBinDiff:
         sql = """create table if not exists callgraph (
                                 id integer primary key auto_increment,
                                 func_id integer not null references functions(id) on delete cascade,
-                                address text not null,
-                                type text not null)"""
+                                address bigint unsigned not null,
+                                type varchar(100) not null)"""
         cur.execute(sql)
 
         sql = """create table if not exists constants (
                                 id integer primary key auto_increment,
                                 func_id integer not null references functions(id) on delete cascade,
-                                constant text not null)"""
+                                constant varchar(1024) not null)"""
         cur.execute(sql)
 
         cur.execute("select 1 from version")
@@ -500,13 +500,13 @@ class CBinDiff:
         sql = "create index if not exists idx_rva on functions(rva)"
         cur.execute(sql)
 
-        sql = "create index if not exists idx_assembly on functions(assembly)"
+        sql = "create index if not exists idx_assembly on functions(assembly(1024))"
         cur.execute(sql)
 
         sql = "create index if not exists idx_bytes_hash on functions(bytes_hash)"
         cur.execute(sql)
 
-        sql = "create index if not exists idx_pseudocode on functions(pseudocode)"
+        sql = "create index if not exists idx_pseudocode on functions(pseudocode(2048))"
         cur.execute(sql)
 
         sql = "create index if not exists idx_name on functions(name)"
@@ -515,7 +515,7 @@ class CBinDiff:
         sql = "create index if not exists idx_mangled_name on functions(mangled_function)"
         cur.execute(sql)
 
-        sql = "create index if not exists idx_names on functions(names)"
+        sql = "create index if not exists idx_names on functions(names(1024))"
         cur.execute(sql)
         
         # sql = "create index if not exists idx_asm_pseudo on functions(assembly, pseudocode)"
@@ -551,13 +551,13 @@ class CBinDiff:
         sql = "create index if not exists idx_pseudocode_hash3 on functions(pseudocode_hash3)"
         cur.execute(sql)
 
-        sql = "create index if not exists idx_pseudocode_hash on functions(pseudocode_hash1(256), pseudocode_hash2(256), pseudocode_hash3(256))"
+        sql = "create index if not exists idx_pseudocode_hash on functions(pseudocode_hash1, pseudocode_hash2, pseudocode_hash3)"
         cur.execute(sql)
 
         sql = "create index if not exists idx_strongly_connected on functions(strongly_connected)"
         cur.execute(sql)
 
-        sql = "create index if not exists idx_strongly_connected_spp on functions(strongly_connected_spp)"
+        sql = "create index if not exists idx_strongly_connected_spp on functions(strongly_connected_spp(2048))"
         cur.execute(sql)
 
         sql = "create index if not exists idx_loops on functions(loops)"
@@ -566,19 +566,19 @@ class CBinDiff:
         sql = "create index if not exists idx_rva on functions(rva)"
         cur.execute(sql)
 
-        sql = "create index if not exists idx_tarjan_topological_sort on functions(tarjan_topological_sort)"
+        sql = "create index if not exists idx_tarjan_topological_sort on functions(tarjan_topological_sort(2048))"
         cur.execute(sql)
 
-        sql = "create index if not exists idx_mnemonics_spp on functions(mnemonics_spp)"
+        sql = "create index if not exists idx_mnemonics_spp on functions(mnemonics_spp(1024))"
         cur.execute(sql)
 
-        sql = "create index if not exists idx_clean_asm on functions(clean_assembly(1000))"
+        sql = "create index if not exists idx_clean_asm on functions(clean_assembly(1024))"
         cur.execute(sql)
 
-        sql = "create index if not exists idx_clean_pseudo on functions(clean_pseudo(1000))"
+        sql = "create index if not exists idx_clean_pseudo on functions(clean_pseudo(1024))"
         cur.execute(sql)
 
-        sql = "create index if not exists idx_switches on functions(switches)"
+        sql = "create index if not exists idx_switches on functions(switches(2048))"
         cur.execute(sql)
 
         sql = "create index if not exists idx_function_hash on functions(function_hash)"
@@ -590,7 +590,7 @@ class CBinDiff:
         sql = "create index if not exists idx_md_index on functions(md_index)"
         cur.execute(sql)
 
-        sql = "create index if not exists idx_kgh_hash on functions(kgh_hash)"
+        sql = "create index if not exists idx_kgh_hash on functions(kgh_hash(2048))"
         cur.execute(sql)
 
         sql = "create index if not exists idx_constants on functions(constants_count, constants(200))"
@@ -708,6 +708,7 @@ class CBinDiff:
             cur.execute(sql, new_props)
         except:
             print("Props???", new_props)
+            import pdb; pdb.set_trace()
             raise
 
         func_id = cur.lastrowid
@@ -2105,23 +2106,23 @@ class CBinDiff:
             sql = f"use `{filename}`"
             cur.execute(sql)
 
-            sql = "create table config (main_db text, diff_db text, version text, date text)"
+            sql = "create table config (main_db varchar(256), diff_db varchar(256), version varchar(256), date varchar(256))"
             cur.execute(sql)
 
             sql = "insert into config values (%s, %s, %s, %s)"
             cur.execute(sql, (self.db_name, self.last_diff_db, VERSION_VALUE, time.asctime()))
 
             sql = """create table results 
-                (type text, line text, address text, name text,
-                address2 text, name2 text, ratio float, bb1 text,
-                bb2 text, description text)
+                (type varchar(256), line varchar(256), address varchar(256), name varchar(256),
+                address2 varchar(256), name2 varchar(256), ratio float, bb1 varchar(256),
+                bb2 varchar(256), description varchar(256))
             """
             cur.execute(sql)
 
             sql = "create unique index uq_results on results(address, address2)"
             cur.execute(sql)
 
-            sql = "create table unmatched (type text, line text, address text, name text)"
+            sql = "create table unmatched (type varchar(100), line varchar(100), address bigint, name varchar(100))"
             cur.execute(sql)
 
             results_sql     = "insert into results values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
