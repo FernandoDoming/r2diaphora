@@ -1,8 +1,15 @@
 import os
+from sys import stderr
 import time
 import logging
 import traceback
+import pycparser
 import r2pipe
+import platform
+
+import subprocess
+from subprocess import Popen
+from pycparser import CParser, c_ast
 
 from jkutils.factor import primesbelow as primes
 from instructions import CPU_INSTRUCTIONS
@@ -22,35 +29,59 @@ BADADDR = 0xFFFFFFFFFFFFFFFF
 r2 = None
 
 #-------------------------------------------------------------------------------
-class ctree_visitor_t():
-    def __init__(self, _):
-        pass
+class CAstVisitor(c_ast.NodeVisitor):
+    def __init__(self):
+        self.primes      = primes(4096)
+        self.primes_hash = 1
+        self.cfunc       = None
+        self.ast         = None
+        return
 
-    def apply_to(self, item, parent):
-        pass
+    def apply_to(self, pseudo):
+        self.cfunc = pseudo
+        if self.build_ast():
+            import pdb; pdb.set_trace()
+            self.visit(self.ast)
 
-#-------------------------------------------------------------------------------
-class CAstVisitor(ctree_visitor_t):
-  def __init__(self, cfunc):
-    self.primes = primes(4096)
-    ctree_visitor_t.__init__(self)
-    self.cfunc = cfunc
-    self.primes_hash = 1
-    return
+    def build_ast(self):
+        pseudo = f"""
+        #include <stdlib.h>
 
-  def visit_expr(self, expr):
-    try:
-      self.primes_hash *= self.primes[expr.op]
-    except:
-      traceback.print_exc()
-    return 0
+        {self.cfunc}
+        """
+        dirname  = os.path.dirname(__file__)
+        libdir = os.path.abspath(
+            os.path.join(dirname, "pycparser", "fake_libc_include")
+        )
+        parser = CParser()
 
-  def visit_insn(self, ins):
-    try:
-      self.primes_hash *= self.primes[ins.op]
-    except:
-      traceback.print_exc()
-    return 0
+        try:
+            p = Popen(
+                ["gcc", "-nostdinc", "-E", f"-I{libdir}", "-xc", "-"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            stdout, stderr = p.communicate(bytes(pseudo, "utf-8"))
+            self.ast = parser.parse(stdout.decode("utf-8"))
+            return True
+
+        except Exception:
+            return False
+
+    def visit_expr(self, expr):
+        try:
+            self.primes_hash *= self.primes[expr.op]
+        except:
+            traceback.print_exc()
+        return 0
+
+    def visit_insn(self, ins):
+        try:
+            self.primes_hash *= self.primes[ins.op]
+        except:
+            traceback.print_exc()
+        return 0
 
 
 #-----------------------------------------------------------------------
@@ -223,7 +254,6 @@ def GetOperandValue(ea, n):
 def r2_get_imagebase():
     #ep = ((int(r2.cmd("ieq"), 16) >> 24) << 24)
     ep = int(log_exec_r2_cmd("ia~baddr[1]"), 16)
-    log.debug("IMAGE BASE %s"%ep)
     return ep
 
 #-----------------------------------------------------------------------
@@ -417,9 +447,16 @@ def r2_open(input_path):
     #r2.cmd("aeim")
     r2.cmd("e anal.hasnext=true")
 
+    dll_extensions = {
+        "Darwin": "dylib",
+        "Linux": "so",
+        "Windows": "dll"
+    }
+
     # Workaround to load the Ghidra plugins because ccall is bugged 
     # and does not load it automatically
-    r2.cmd(f"L {os.path.expanduser('~/.local/share/radare2/plugins/core_ghidra.dylib')}")
+    ext = dll_extensions.get(platform.system())
+    r2.cmd(f"L {os.path.expanduser('~/.local/share/radare2/plugins/core_ghidra.' + ext)}")
 
 def r2_close():
     global r2
