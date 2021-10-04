@@ -1584,6 +1584,13 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "-nbbs",
+        default=0,
+        type=int,
+        help='Functions with a number of basic blocks below this number are excluded from analysis'
+    )
+
+    parser.add_argument(
         "-o",
         default=None,
         help="Diff output file (HTML) - Default value: <db1name>_vs_<db2name>.html"
@@ -1603,7 +1610,7 @@ if __name__ == "__main__":
     bd = diaphora.CBinDiff(db1name)
 
     fn_filter = lambda fn: (
-        not fn["name"].startswith("flirt.")
+        not fn["name"].startswith("flirt.") and fn["nbbs"] >= args.nbbs
     )
     if args.analyze_all:
         fn_filter = None
