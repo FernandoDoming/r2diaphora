@@ -388,7 +388,7 @@ class CBinDiff:
                                                 pseudocode mediumtext,
                                                 pseudocode_lines integer,
                                                 pseudocode_hash1 varchar(100),
-                                                pseudocode_primes integer,
+                                                pseudocode_primes text,
                                                 function_flags integer,
                                                 assembly mediumtext,
                                                 prototype2 varchar(1024),
@@ -708,7 +708,6 @@ class CBinDiff:
             cur.execute(sql, new_props)
         except:
             print("Props???", new_props)
-            import pdb; pdb.set_trace()
             raise
 
         func_id = cur.lastrowid

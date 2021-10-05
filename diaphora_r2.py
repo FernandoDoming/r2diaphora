@@ -21,7 +21,7 @@ along with this program. If not, see <http://www.gnu.org/licenses/>.
 """
 
 import os
-from subprocess import TimeoutExpired
+import re
 import sys
 import time
 import json
@@ -682,18 +682,33 @@ class CIDABinDiff(diaphora.CBinDiff):
     #         log.debug("import_all(): %s" % str(sys.exc_info()[1]))
     #         traceback.print_exc()
 
+    def clean_pseudocode(self, code):
+        lines = code.split("\n")
+        code = [line for line in lines if not line.strip().startswith("//")]
+        code = "\n".join(code)
+
+        code = re.sub(r"__regparm\d", "", code)
+
+        return code.replace("sym.imp.", "")\
+                   .replace("sym.", "")\
+                   .replace("fcn.", "fcn_")\
+                   .replace("flirt.", "")\
+                   .replace("obj.", "")\
+                   .replace("noreturn", "")
+
     def decompile_and_get(self, ea):
         sv = decompile(ea);
         if sv is None:
             # Failed to decompile
             return None
 
-        # cfunc = self.do_decompile(f)
-        # visitor = CAstVisitor(cfunc)
-        # visitor.apply_to(cfunc.body, None)
-        # self.pseudo_hash[ea] = visitor.primes_hash
-
-        self.pseudo_hash[ea] = 0
+        visitor = CAstVisitor()
+        visitor.apply_to(
+            f"""
+            {self.clean_pseudocode(sv)}
+            """
+        )
+        self.pseudo_hash[ea] = visitor.primes_hash
         self.pseudo[ea] = []
 
         first_line = None
@@ -845,7 +860,7 @@ class CIDABinDiff(diaphora.CBinDiff):
             bb_topological[idx] = []
             bb_topo_num[block_ea] = idx
 
-            for x in list(Heads(block["addr"], block["ninstr"])):
+            for x in Heads(block["addr"], block["ninstr"]):
                 mnem = GetMnem(x)
                 disasm = GetDisasm(x)
                 instructions += 1

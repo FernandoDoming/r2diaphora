@@ -29,6 +29,92 @@ BADADDR = 0xFFFFFFFFFFFFFFFF
 r2 = None
 
 #-------------------------------------------------------------------------------
+EXPR_DEFS = {
+    "cot_empty"    : 0,
+    "cot_comma"    : 1,   # x, y
+    "cot_asg"      : 2,   # x = y
+    "cot_asgbor"   : 3,   # x |= y
+    "cot_asgxor"   : 4,   # x ^= y
+    "cot_asgband"  : 5,   # x &= y
+    "cot_asgadd"   : 6,   # x += y
+    "cot_asgsub"   : 7,   # x -= y
+    "cot_asgmul"   : 8,   # x *= y
+    "cot_asgsshr"  : 9,   # x >>= y signed
+    "cot_asgushr"  : 10,  # x >>= y unsigned
+    "cot_asgshl"   : 11,  # x <<= y
+    "cot_asgsdiv"  : 12,  # x /= y signed
+    "cot_asgudiv"  : 13,  # x /= y unsigned
+    "cot_asgsmod"  : 14,  # x %= y signed
+    "cot_asgumod"  : 15,  # x %= y unsigned
+    "cot_tern"     : 16,  # x ? y : z
+    "cot_lor"      : 17,  # x || y
+    "cot_land"     : 18,  # x && y
+    "cot_bor"      : 19,  # x | y
+    "cot_xor"      : 20,  # x ^ y
+    "cot_band"     : 21,  # x & y
+    "cot_eq"       : 22,  # x == y int or fpu (see EXFL_FPOP)
+    "cot_ne"       : 23,  # x != y int or fpu (see EXFL_FPOP)
+    "cot_sge"      : 24,  # x >= y signed or fpu (see EXFL_FPOP)
+    "cot_uge"      : 25,  # x >= y unsigned
+    "cot_sle"      : 26,  # x <= y signed or fpu (see EXFL_FPOP)
+    "cot_ule"      : 27,  # x <= y unsigned
+    "cot_sgt"      : 28,  # x >  y signed or fpu (see EXFL_FPOP)
+    "cot_ugt"      : 29,  # x >  y unsigned
+    "cot_slt"      : 30,  # x <  y signed or fpu (see EXFL_FPOP)
+    "cot_ult"      : 31,  # x <  y unsigned
+    "cot_sshr"     : 32,  # x >> y signed
+    "cot_ushr"     : 33,  # x >> y unsigned
+    "cot_shl"      : 34,  # x << y
+    "cot_add"      : 35,  # x + y
+    "cot_sub"      : 36,  # x - y
+    "cot_mul"      : 37,  # x * y
+    "cot_sdiv"     : 38,  # x / y signed
+    "cot_udiv"     : 39,  # x / y unsigned
+    "cot_smod"     : 40,  # x % y signed
+    "cot_umod"     : 41,  # x % y unsigned
+    "cot_fadd"     : 42,  # x + y fp
+    "cot_fsub"     : 43,  # x - y fp
+    "cot_fmul"     : 44,  # x * y fp
+    "cot_fdiv"     : 45,  # x / y fp
+    "cot_fneg"     : 46,  # -x fp
+    "cot_neg"      : 47,  # -x
+    "cot_cast"     : 48,  # (type)x
+    "cot_lnot"     : 49,  # !x
+    "cot_bnot"     : 50,  # ~x
+    "cot_ptr"      : 51,  # *x, access size in 'ptrsize'
+    "cot_ref"      : 52,  # &x
+    "cot_postinc"  : 53,  # x++
+    "cot_postdec"  : 54,  # x--
+    "cot_preinc"   : 55,  # ++x
+    "cot_predec"   : 56,  # --x
+    "cot_call"     : 57,  # x(...)
+    "cot_idx"      : 58,  # x[y]
+    "cot_memref"   : 59,  # x.m
+    "cot_memptr"   : 60,  # x->m, access size in 'ptrsize'
+    "cot_num"      : 61,  # n
+    "cot_fnum"     : 62,  # fpc
+    "cot_str"      : 63,  # string constant
+    "cot_obj"      : 64,  # obj_ea
+    "cot_var"      : 65,  # v
+    "cot_insn"     : 66,  # instruction in expression, internal representation only
+    "cot_sizeof"   : 67,  # sizeof(x)
+    "cot_helper"   : 68,  # arbitrary name
+    "cot_type"     : 69,  # arbitrary type
+    "cit_empty"    : 70,  # instruction types start here
+    "cit_block"    : 71,  # block-statement: { ... }
+    "cit_expr"     : 72,  # expression-statement: expr;
+    "cit_if"       : 73,  # if-statement
+    "cit_for"      : 74,  # for-statement
+    "cit_while"    : 75,  # while-statement
+    "cit_do"       : 76,  # do-statement
+    "cit_switch"   : 77,  # switch-statement
+    "cit_break"    : 78,  # break-statement
+    "cit_continue" : 79,  # continue-statement
+    "cit_return"   : 80,  # return-statement
+    "cit_goto"     : 81,  # goto-statement
+    "cit_asm"      : 82,  # asm-statement
+}
+#-------------------------------------------------------------------------------
 class CAstVisitor(c_ast.NodeVisitor):
     def __init__(self):
         self.primes      = primes(4096)
@@ -40,8 +126,7 @@ class CAstVisitor(c_ast.NodeVisitor):
     def apply_to(self, pseudo):
         self.cfunc = pseudo
         if self.build_ast():
-            import pdb; pdb.set_trace()
-            self.visit(self.ast)
+            self.visit(self.ast.ext[-1])
 
     def build_ast(self):
         pseudo = f"""
@@ -67,22 +152,129 @@ class CAstVisitor(c_ast.NodeVisitor):
             return True
 
         except Exception:
+            # log.exception(f"Could not obtain AST for {pseudo}")
             return False
 
-    def visit_expr(self, expr):
-        try:
-            self.primes_hash *= self.primes[expr.op]
-        except:
-            traceback.print_exc()
-        return 0
+    def visit_FuncCall(self, node):
+        self.primes_hash *= self.primes[EXPR_DEFS["cot_call"]]
 
-    def visit_insn(self, ins):
-        try:
-            self.primes_hash *= self.primes[ins.op]
-        except:
-            traceback.print_exc()
-        return 0
+    def visit_If(self, node):
+        self.primes_hash *= self.primes[EXPR_DEFS["cit_if"]]
 
+    def visit_For(self, node):
+        self.primes_hash *= self.primes[EXPR_DEFS["cit_for"]]
+
+    def visit_While(self, node):
+        self.primes_hash *= self.primes[EXPR_DEFS["cit_while"]]
+
+    def visit_DoWhile(self, node):
+        self.primes_hash *= self.primes[EXPR_DEFS["cit_do"]]
+
+    def visit_Switch(self, node):
+        self.primes_hash *= self.primes[EXPR_DEFS["cit_switch"]]
+
+    def visit_Break(self, node):
+        self.primes_hash *= self.primes[EXPR_DEFS["cit_break"]]
+
+    def visit_Continue(self, node):
+        self.primes_hash *= self.primes[EXPR_DEFS["cit_continue"]]
+
+    def visit_Assignment(self, node):
+        if node.op == "=":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_asg"]]
+        elif node.op == "|=":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_asgbor"]]
+        elif node.op == "^=":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_asgxor"]]
+        elif node.op == "&=":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_asgband"]]
+        elif node.op == "+=":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_asgadd"]]
+        elif node.op == "-=":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_asgsub"]]
+        elif node.op == "*=":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_asgmul"]]
+        elif node.op == ">>=":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_asgsshr"]]
+        elif node.op == "<<=":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_asgshl"]]
+        elif node.op == "/=":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_asgsdiv"]]
+        elif node.op == "%=":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_asgsmod"]]
+
+    def visit_TernaryOp(self, node):
+        self.primes_hash *= self.primes[EXPR_DEFS["cot_tern"]]
+
+    def visit_BinaryOp(self, node):
+        if node.op == "+":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_add"]]
+        elif node.op == "-":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_sub"]]
+        elif node.op == "*":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_mul"]]
+        elif node.op == "/":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_sdiv"]]
+        elif node.op == "%":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_smod"]]
+        elif node.op == ">":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_sgt"]]
+        elif node.op == "<":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_slt"]]
+        elif node.op == ">>":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_sshr"]]
+        elif node.op == "<<":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_shl"]]
+        elif node.op == "^":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_xor"]]
+        elif node.op == "&":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_band"]]
+        elif node.op == "&&":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_land"]]
+        elif node.op == "|":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_bor"]]
+        elif node.op == "||":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_lor"]]
+        elif node.op == "==":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_eq"]]
+        elif node.op == "!=":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_ne"]]
+        elif node.op == ">=":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_sge"]]
+        elif node.op == "<=":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_sle"]]
+
+    def visit_UnaryOp(self, node):
+        if node.op == "sizeof":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_sizeof"]]
+        elif node.op == "p++":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_postinc"]]
+        elif node.op == "p--":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_postdec"]]
+        elif node.op == "++p":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_preinc"]]
+        elif node.op == "--p":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_predec"]]
+        elif node.op == "!":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_lnot"]]
+        elif node.op == "&":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_ref"]]
+        elif node.op == "~":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_bnot"]]
+        elif node.op == "*":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_ptr"]]
+
+    def visit_ArrayRef(self, node):
+        self.primes_hash *= self.primes[EXPR_DEFS["cot_idx"]]
+
+    def visit_StructRef(self, node):
+        if node.type == ".":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_memref"]]
+        elif node.type == "->":
+            self.primes_hash *= self.primes[EXPR_DEFS["cot_memptr"]]
+
+    def visit_Return(self, node):
+        self.primes_hash *= self.primes[EXPR_DEFS["cit_return"]]
 
 #-----------------------------------------------------------------------
 def log_exec_r2_cmdj(cmd):

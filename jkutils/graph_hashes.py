@@ -139,7 +139,7 @@ class CKoretKaramitasHash:
       hash *= self.get_edges_value(block, succs, preds)
 
       # ...and each instruction on each basic block
-      for ea in list(Heads(block["start_ea"], block["ninstr"])):
+      for ea in Heads(block["start_ea"], block["ninstr"]):
 
         if self.is_call_insn(ea):
           hash *= FEATURE_CALL
