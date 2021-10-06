@@ -113,7 +113,10 @@ def timeout(s):
 
 
 #-----------------------------------------------------------------------
-g_bindiff = None
+g_bindiff_opts = {
+    "decompiler_command": "pdg",
+    "use_decompiler": True
+}
 
 # #-----------------------------------------------------------------------
 # def import_definitions():
@@ -697,7 +700,7 @@ class CIDABinDiff(diaphora.CBinDiff):
                    .replace("noreturn", "")
 
     def decompile_and_get(self, ea):
-        sv = decompile(ea);
+        sv = decompile(ea, decompiler_command=self.decompiler_command);
         if sv is None:
             # Failed to decompile
             return None
@@ -1336,7 +1339,7 @@ class CIDABinDiff(diaphora.CBinDiff):
 
 #-----------------------------------------------------------------------
 def _diff_or_export(function_filter = None, dbname = None, userdata = "", **options):
-    global g_bindiff
+    global g_bindiff_opts
 
     total_functions = len(list(Functions(function_filter)))
     options["function_filter"] = function_filter
@@ -1347,7 +1350,8 @@ def _diff_or_export(function_filter = None, dbname = None, userdata = "", **opti
 
     try:
         bd = CIDABinDiff(opts.file_out)
-        bd.use_decompiler_always = (get_arch() != "sh")
+        bd.use_decompiler_always = (get_arch() != "sh") and g_bindiff_opts.get("use_decompiler", True)
+        bd.decompiler_command = g_bindiff_opts.get("decompiler_command", "pdg")
         bd.exclude_library_thunk = opts.exclude_library_thunk
         bd.unreliable = opts.unreliable
         bd.slow_heuristics = opts.slow
@@ -1579,6 +1583,7 @@ def generate_db_for_file(filepath, override_if_existing = False, function_filter
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "file1",
@@ -1612,6 +1617,22 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "-d",
+        "--decompiler",
+        default="ghidra",
+        choices=["pdc", "ghidra"],
+        help="Which decompiler to use"
+    )
+
+    parser.add_argument(
+        "-nd",
+        "--no-decompiler",
+        dest='no_decompiler',
+        action='store_true',
+        help="Do not use the decompiler"
+    )
+
+    parser.add_argument(
         "-a",
         dest='analyze_all',
         action='store_true',
@@ -1620,6 +1641,13 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     args.file1 = args.file1[0]
+    decompiler_commands = {
+        "ghidra": "pdg",
+        "pdc": "pdc"
+    }
+    
+    g_bindiff_opts["decompiler_command"] = decompiler_commands.get(args.decompiler)
+    g_bindiff_opts["use_decompiler"] = args.no_decompiler
 
     db1name = dbname_for_file(args.file1)
     bd = diaphora.CBinDiff(db1name)

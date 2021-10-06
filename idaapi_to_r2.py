@@ -2,7 +2,6 @@ import os
 from sys import stderr
 import time
 import logging
-import traceback
 import pycparser
 import r2pipe
 import platform
@@ -461,8 +460,8 @@ def GetStructIdByName(x):
     return None
 
 #-----------------------------------------------------------------------
-def decompile(ea):
-    return log_exec_r2_cmd(f"pdg @ {ea}")
+def decompile(ea, decompiler_command = "pdg"):
+    return log_exec_r2_cmd(f"{decompiler_command} @ {ea}")
 
 #-----------------------------------------------------------------------
 def get_func(ea):

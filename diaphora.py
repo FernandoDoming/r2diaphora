@@ -257,6 +257,7 @@ class CBinDiff:
         self.experimental = False
         self.slow_heuristics = False
         self.use_decompiler_always = True
+        self.decompiler_command = "pdg"
         self.exclude_library_thunk = True
         self.project_script = None
         self.hooks = None
