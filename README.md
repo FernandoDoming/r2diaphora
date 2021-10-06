@@ -13,23 +13,27 @@ Quoting from the original repository:
 0. r2diaphora requires radare2 to be installed in the local machine and a valid connection to a MySQL server. If you don't have either of those refer to the respective software manual on how to install them.
 1. Clone this repo
 2. Fill in your MySQL credentials in `db.json`
-3. Install requirements (pip install -r requirements.txt)
+3. (Optional) Install r2ghidra with `r2pm -ci r2ghidra`. Optionally you can use `pdc` (`-d pdc`) or no decompiler at all (`-nd`)
+4. Install requirements (pip install -r requirements.txt)
 
 ## Usage
 
 ```
-./diaphora_r2.py -h
-usage: diaphora_r2.py [-h] [-f] [-o O] [-a] file1 [file2]
+usage: diaphora_r2.py [-h] [-f] [-nbbs NBBS] [-o O] [-d {pdc,ghidra}] [-nd] [-a] file1 [file2]
 
 positional arguments:
-  file1       File to analyze
-  file2       (Optional) File to diff against
+  file1                 File to analyze
+  file2                 (Optional) File to diff against
 
 optional arguments:
-  -h, --help  show this help message and exit
-  -f          Force DB override
-  -o O        Diff output file (HTML) - Default value: <db1name>_vs_<db2name>.html
-  -a          Analyze ALL functions (by default library functions are skipped)
+  -h, --help            show this help message and exit
+  -f                    Force DB override
+  -nbbs NBBS            Functions with a number of basic blocks below this number are excluded from analysis
+  -o O                  Diff output file (HTML) - Default value: <db1name>_vs_<db2name>.html
+  -d {pdc,ghidra}, --decompiler {pdc,ghidra}
+                        Which decompiler to use
+  -nd, --no-decompiler  Do not use the decompiler
+  -a                    Analyze ALL functions (by default library functions are skipped)
 ```
 
 ```
