@@ -2,7 +2,6 @@ import os
 from sys import stderr
 import time
 import logging
-import pycparser
 import r2pipe
 import platform
 
@@ -10,8 +9,8 @@ import subprocess
 from subprocess import Popen
 from pycparser import CParser, c_ast
 
-from jkutils.factor import primesbelow as primes
-from instructions import CPU_INSTRUCTIONS
+from .jkutils.factor import primesbelow as primes
+from .instructions import CPU_INSTRUCTIONS
 
 LOG_FORMAT = "%(asctime)-15s [%(levelname)s] - %(message)s"
 log = logging.getLogger("diaphora.idaconv")

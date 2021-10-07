@@ -1,6 +1,6 @@
 # r2diaphora
 
-r2diaphora is a port of [Diaphora](https://github.com/joxeankoret/diaphora) to [radare2](https://github.com/radareorg/radare2) and MySQL. It also uses [r2ghidra](https://github.com/radareorg/r2ghidra) as decompiler.
+r2diaphora is a port of [Diaphora](https://github.com/joxeankoret/diaphora) to [radare2](https://github.com/radareorg/radare2) and MySQL. It also uses [r2ghidra](https://github.com/radareorg/r2ghidra) as decompiler by default, with support for other decompilers such as `pdc`.
 
 ## What is diaphora?
 
@@ -14,7 +14,7 @@ Quoting from the original repository:
 1. Clone this repo
 2. Fill in your MySQL credentials in `db.json`
 3. (Optional) Install r2ghidra with `r2pm -ci r2ghidra`. Optionally you can use `pdc` (`-d pdc`) or no decompiler at all (`-nd`)
-4. Install requirements (pip install -r requirements.txt)
+4. Install requirements (`pip install -r requirements.txt`)
 
 ## Usage
 

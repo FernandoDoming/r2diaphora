@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Diaphora, a diffing plugin for Radare2
+Copyright (c) 2021, Fernando Domínguez
 Copyright (c) 2017, Sergi Alvarez
 
 Based on IDA backend by:
@@ -37,19 +38,13 @@ try:
 except ImportError:
     import _thread as thread
 
-try: input = raw_input
-except NameError: pass
+from r2diaphora import diaphora
+from r2diaphora.others.tarjan_sort import strongly_connected_components, robust_topological_sort
+from r2diaphora.jkutils.factor import primesbelow as primes
+from r2diaphora.jkutils.graph_hashes import CKoretKaramitasHash
 
-import diaphora
-from pygments import highlight
-from pygments.lexers import NasmLexer, CppLexer
-from pygments.formatters import HtmlFormatter
-
-from others.tarjan_sort import strongly_connected_components, robust_topological_sort
-from jkutils.factor import primesbelow as primes
-from jkutils.graph_hashes import CKoretKaramitasHash
-from idaapi_to_r2 import *
-from html_diff import *
+from r2diaphora.idaapi_to_r2 import *
+from r2diaphora.html_diff import *
 
 LOG_FORMAT = "%(asctime)-15s [%(levelname)s] - %(message)s"
 log = logging.getLogger("diaphora.r2")
@@ -118,67 +113,6 @@ g_bindiff_opts = {
     "use_decompiler": True
 }
 
-# #-----------------------------------------------------------------------
-# def import_definitions():
-#     tmp_diff = diaphora.CBinDiff(":memory:")
-#     filename = AskFile(0, "*.sqlite", "Select the file to import structures, unions and enumerations from")
-#     if filename is not None:
-#         tmp_diff.import_definitions_only(filename)
-
-#-----------------------------------------------------------------------
-# class CDiffGraphViewer():
-#     def __init__(self, title, g, colours):
-#         try:
-#             GraphViewer.__init__(self, title, False)
-#             self.graph = g[0]
-#             self.relations = g[1]
-#             self.nodes = {}
-#             self.colours = colours
-#         except Exception:
-#             print("CDiffGraphViewer: OnInit!!! " + str(sys.exc_info()[1]))
-
-#     def OnRefresh(self):
-#         try:
-#             self.Clear()
-#             self.nodes = {}
-
-#             for key in self.graph:
-#                 self.nodes[key] = self.AddNode([key, self.graph[key]])
-
-#             for key in self.relations:
-#                 if not key in self.nodes:
-#                     self.nodes[key] = self.AddNode([key, [[0, 0, ""]]])
-#                 parent_node = self.nodes[key]
-#                 for child in self.relations[key]:
-#                     if not child in self.nodes:
-#                         self.nodes[child] = self.AddNode([child, [[0, 0, ""]]])
-#                     child_node = self.nodes[child]
-#                     self.AddEdge(parent_node, child_node)
-
-#             return True
-#         except Exception:
-#             log.exception("GraphViewer Error")
-#             return True
-
-#     def OnGetText(self, node_id):
-#         try:
-#             ea, rows = self[node_id]
-#             if ea in self.colours:
-#                 colour = self.colours[ea]
-#             else:
-#                 colour = 0xFFFFFF
-#             ret = []
-#             for row in rows:
-#                 ret.append(row[2])
-#             label = "\n".join(ret)
-#             return (label, colour)
-#         except Exception:
-#             print("GraphViewer.OnGetText:", sys.exc_info()[1])
-#             return ("ERROR", 0x000000)
-
-#     def Show(self):
-#         return GraphViewer.Show(self)
-
 #-----------------------------------------------------------------------
 class CIDABinDiff(diaphora.CBinDiff):
     def __init__(self, db_name: str = ""):
@@ -200,15 +134,6 @@ class CIDABinDiff(diaphora.CBinDiff):
             self.unmatched_primary.show(force)
         if self.unmatched_second is not None and len(self.unmatched_second.items) > 0:
             self.unmatched_second.show(force)
-
-    # def diff(self, db):
-    #     res = diaphora.CBinDiff.diff(self, db)
-    #     # And, finally, show the list of best and partial matches and
-    #     # register the hotkey for re-opening results
-    #     self.show_choosers()
-    #     self.register_menu()
-    #     # hide_wait_box()
-    #     return res
 
     def do_export(self, function_filter = None, userdata = ""):
         callgraph_primes = 1
@@ -272,55 +197,6 @@ class CIDABinDiff(diaphora.CBinDiff):
         self.db.commit()
         self.db_close()
 
-    # def import_til(self):
-    #     log.debug("Importing type libraries...")
-    #     cur = self.db_cursor()
-    #     sql = "select name from diff.program_data where type = 'til'"
-    #     cur.execute(sql)
-    #     for row in cur.fetchall():
-    #         LoadTil(row["name"])
-    #     cur.close()
-    #     Wait()
-
-    # def import_definitions(self):
-    #     cur = self.db_cursor()
-    #     sql = "select type, name, value from diff.program_data where type in ('structure', 'struct', 'enum')"
-    #     cur.execute(sql)
-    #     rows = diaphora.result_iter(cur)
-
-    #     new_rows = set()
-    #     for row in rows:
-    #         if row["name"] is None:
-    #             continue
-
-    #         the_name = row["name"].split(" ")[0]
-    #         if GetStrucIdByName(the_name) == BADADDR:
-    #             type_name = "struct"
-    #             if row["type"] == "enum":
-    #                 type_name = "enum"
-    #             elif row["type"] == "union":
-    #                 type_name == "union"
-
-    #             new_rows.add(row)
-    #             ret = ParseTypes("%s %s;" % (type_name, row["name"]))
-    #             if ret != 0:
-    #                 pass
-
-    #     for i in xrange(10):
-    #         for row in new_rows:
-    #             if row["name"] is None:
-    #                 continue
-
-    #             the_name = row["name"].split(" ")[0]
-    #             if GetStrucIdByName(the_name) == BADADDR and GetStrucIdByName(row["name"]) == BADADDR:
-    #                 definition = self.get_valid_definition(row["value"])
-    #                 ret = ParseTypes(definition)
-    #                 if ret != 0:
-    #                     pass
-
-    #     cur.close()
-    #     Wait()
-
     def reinit(self, main_db, diff_db, create_choosers=True):
         log.debug("Main database '%s'." % main_db)
         log.debug("Diff database '%s'." % diff_db)
@@ -352,152 +228,6 @@ class CIDABinDiff(diaphora.CBinDiff):
         self.save_function(new_func)
 
         self.db.commit()
-
-    # def show_asm(self, item, primary):
-    #     cur = self.db_cursor()
-    #     if primary:
-    #         db = "main"
-    #     else:
-    #         db = "diff"
-    #     ea = str(int(item[1], 16))
-    #     sql = "select prototype, assembly, name from %s.functions where address = ?"
-    #     sql = sql % db
-    #     cur.execute(sql, (ea, ))
-    #     row = cur.fetchone()
-    #     if row is None:
-    #         print("Sorry, there is no assembly available for the selected function.")
-    #     else:
-    #         fmt = HtmlFormatter()
-    #         fmt.noclasses = True
-    #         fmt.linenos = True
-    #         asm = self.prettify_asm(row["assembly"])
-    #         final_asm = "; %s\n%s proc near\n%s\n%s endp\n"
-    #         final_asm = final_asm % (row["prototype"], row["name"], asm, row["name"])
-    #         src = highlight(final_asm, NasmLexer(), fmt)
-    #         title = "Assembly for %s" % row["name"]
-    #         cdiffer = CHtmlViewer()
-    #         cdiffer.Show(src, title)
-    #     cur.close()
-
-    # def show_pseudo(self, item, primary):
-    #     cur = self.db_cursor()
-    #     if primary:
-    #         db = "main"
-    #     else:
-    #         db = "diff"
-    #     ea = str(int(item[1], 16))
-    #     sql = "select prototype, pseudocode, name from %s.functions where address = ?"
-    #     sql = sql % db
-    #     cur.execute(sql, (str(ea), ))
-    #     row = cur.fetchone()
-    #     if row is None or row["prototype"] is None or row["pseudocode"] is None:
-    #         print("Sorry, there is no pseudo-code available for the selected function.")
-    #     else:
-    #         fmt = HtmlFormatter()
-    #         fmt.noclasses = True
-    #         fmt.linenos = True
-    #         func = "%s\n%s" % (row["prototype"], row["pseudocode"])
-    #         src = highlight(func, CppLexer(), fmt)
-    #         title = "Pseudo-code for %s" % row["name"]
-    #         print(title)
-    #         print(src)
-    #     cur.close()
-
-    # def show_pseudo_diff(self, item):
-    #     cur = self.db_cursor()
-    #     sql = """select *
-    #                          from (
-    #                      select prototype, pseudocode, name, 1
-    #                          from functions
-    #                         where address = ?
-    #                             and pseudocode is not null
-    #          union select prototype, pseudocode, name, 2
-    #                          from diff.functions
-    #                         where address = ?
-    #                             and pseudocode is not null)
-    #                         order by 4 asc"""
-    #     ea1 = str(int(item[1], 16))
-    #     ea2 = str(int(item[3], 16))
-    #     cur.execute(sql, (ea1, ea2))
-    #     rows = cur.fetchall()
-    #     if len(rows) != 2:
-    #         print("Sorry, there is no pseudo-code available for either the first or the second database.")
-    #     else:
-    #         row1 = rows[0]
-    #         row2 = rows[1]
-
-    #         html_diff = CHtmlDiff()
-    #         buf1 = row1["prototype"] + "\n" + row1["pseudocode"]
-    #         buf2 = row2["prototype"] + "\n" + row2["pseudocode"]
-    #         src = html_diff.make_file(buf1.split("\n"), buf2.split("\n"))
-
-    #         title = "Diff pseudo-code %s - %s" % (row1["name"], row2["name"])
-    #         print(title)
-    #         print(src)
-
-    #     cur.close()
-
-    # def graph_diff(self, ea1, name1, ea2, name2):
-    #     g1 = self.get_graph(str(ea1), True)
-    #     g2 = self.get_graph(str(ea2))
-
-    #     if g1 == ({}, {}) or g2 == ({}, {}):
-    #         print("Sorry, graph information is not available for one of the databases.")
-    #         return False
-
-    #     colours = self.compare_graphs(g1, ea1, g2, ea2)
-
-    #     title1 = "Graph for %s (primary)" % name1
-    #     title2 = "Graph for %s (secondary)" % name2
-    #     graph1 = CDiffGraphViewer(title1, g1, colours[0])
-    #     graph2 = CDiffGraphViewer(title2, g2, colours[1])
-    #     graph1.Show()
-    #     graph2.Show()
-
-    #     set_dock_pos(title1, title2, DP_RIGHT)
-    #     uitimercallback_t(graph1, 10)
-    #     uitimercallback_t(graph2, 10)
-
-    # def import_instruction(self, ins_data1, ins_data2):
-    #     ea1 = self.get_base_address() + int(ins_data1[0])
-    #     ea2, cmt1, cmt2, name, mtype = ins_data2
-    #     # Set instruction level comments
-    #     if cmt1 is not None and get_cmt(ea1, 0) is None:
-    #         set_cmt(ea1, cmt1, 0)
-
-    #     if cmt2 is not None and get_cmt(ea1, 1) is None:
-    #         set_cmt(ea1, cmt1, 1)
-
-    #     tmp_ea = None
-    #     set_type = False
-    #     data_refs = list(DataRefsFrom(ea1))
-    #     if len(data_refs) > 0:
-    #         # Global variables
-    #         tmp_ea = data_refs[0]
-    #         if tmp_ea in self.names:
-    #             curr_name = GetTrueName(tmp_ea)
-    #             if curr_name != name and self.is_auto_generated(curr_name):
-    #                 MakeName(tmp_ea, name)
-    #                 set_type = False
-    #         else:
-    #             MakeName(tmp_ea, name)
-    #             set_type = True
-    #     else:
-    #         # Functions
-    #         code_refs = list(CodeRefsFrom(ea1, 0))
-    #         if len(code_refs) == 0:
-    #             code_refs = list(CodeRefsFrom(ea1, 1))
-
-    #         if len(code_refs) > 0:
-    #             curr_name = GetTrueName(code_refs[0])
-    #             if curr_name != name and self.is_auto_generated(curr_name):
-    #                 MakeName(code_refs[0], name)
-    #                 tmp_ea = code_refs[0]
-    #                 set_type = True
-
-    #     if tmp_ea is not None and set_type:
-    #         if mtype is not None and GetType(tmp_ea) != mtype:
-    #             SetType(tmp_ea, mtype)
 
     def import_instruction_level(self, ea1, ea2, cur):
         cur = self.db_cursor()
@@ -576,114 +306,6 @@ class CIDABinDiff(diaphora.CBinDiff):
                                 change_line = to_line = None
         finally:
             cur.close()
-
-    # def do_import_one(self, ea1, ea2, force = False):
-    #     cur = self.db_cursor()
-    #     sql = "select prototype, comment, mangled_function, function_flags from diff.functions where address = ?"
-    #     cur.execute(sql, (ea2,))
-    #     row = cur.fetchone()
-    #     if row is not None:
-    #         proto = row["prototype"]
-    #         comment = row["comment"]
-    #         name = row["mangled_function"]
-    #         flags = row["function_flags"]
-
-    #         ea1 = int(ea1)
-    #         if not name.startswith("sub_") or force:
-    #             if not MakeNameEx(ea1, name, SN_NOWARN|SN_NOCHECK):
-    #                 for i in xrange(10):
-    #                     if MakeNameEx(ea1, "%s_%d" % (name, i), SN_NOWARN|SN_NOCHECK):
-    #                         break
-
-    #         if proto is not None and proto != "int()":
-    #             SetType(ea1, proto)
-
-    #         if comment is not None and comment != "":
-    #             SetFunctionCmt(ea1, comment, 1)
-
-    #         if flags is not None:
-    #             SetFunctionFlags(ea1, flags)
-
-    #         self.import_instruction_level(ea1, ea2, cur)
-
-    #     cur.close()
-
-    # def import_selected(self, items, selected):
-    #     # Import all the type libraries from the diff database
-    #     self.import_til()
-    #     # Import all the struct and enum definitions
-    #     self.import_definitions()
-
-    #     new_items = []
-    #     for item in selected:
-    #         new_items.append(items[item-1])
-    #     self.import_items(new_items)
-
-    # def import_items(self, items):
-    #     to_import = set()
-    #     # Import all the function names and comments
-    #     for item in items:
-    #         ea1 = str(int(item[1], 16))
-    #         ea2 = str(int(item[3], 16))
-    #         self.do_import_one(ea1, ea2)
-    #         to_import.add(ea1)
-
-    #     try:
-    #         show_wait_box("Updating primary database...")
-    #         total = 0
-    #         for ea in to_import:
-    #             ea = str(ea)
-    #             print("FCN IMPORT %s"%ea)
-    #             new_func = self.read_function(ea)
-    #             self.delete_function(ea)
-    #             self.save_function(new_func)
-    #             total += 1
-    #         self.db.commit()
-    #     finally:
-    #         print("Nothing")
-    #         #hide_wait_box()
-
-    # def do_import_all(self, items):
-    #     # Import all the type libraries from the diff database
-    #     self.import_til()
-    #     # Import all the struct and enum definitions
-    #     self.import_definitions()
-    #     # Import all the items in the chooser
-    #     self.import_items(items)
-
-    # def do_import_all_auto(self, items):
-    #     # Import all the type libraries from the diff database
-    #     self.import_til()
-    #     # Import all the struct and enum definitions
-    #     self.import_definitions()
-
-    #     # Import all the items in the chooser for sub_* functions
-    #     new_items = []
-    #     for item in items:
-    #         name1 = item[2]
-    #         if name1.startswith("sub_"):
-    #             new_items.append(item)
-
-    #     self.import_items(new_items)
-
-    # def import_all(self, items):
-    #     try:
-    #         self.do_import_all(items)
-
-    #         msg = "AUTOHIDE DATABASE\nHIDECANCEL\nAll functions were imported. Do you want to relaunch the diffing process?"
-    #         self.db.execute("detach diff")
-    #         # We cannot run that code here or otherwise IDA will crash corrupting the stack
-    #         timeraction_t(self.re_diff, None, 1000)
-    #     except Exception:
-    #         log.debug("import_all(): %s" % str(sys.exc_info()[1]))
-    #         traceback.print_exc()
-
-    # def import_all_auto(self, items):
-    #     try:
-    #         self.do_import_all_auto(items)
-    #     except Exception:
-    #         log.debug("import_all(): %s" % str(sys.exc_info()[1]))
-    #         traceback.print_exc()
 
     def clean_pseudocode(self, code):
         lines = code.split("\n")
@@ -1243,79 +865,6 @@ class CIDABinDiff(diaphora.CBinDiff):
             for til in til_names:
                 self.add_program_data("til", til, None)
 
-    # def load_results(self, filename):
-    #     results_db = sqlite3.connect(filename)
-    #     results_db.text_factory = str
-    #     results_db.row_factory = sqlite3.Row
-
-    #     cur = results_db.cursor()
-    #     try:
-    #         sql = "select main_db, diff_db, version from config"
-    #         cur.execute(sql)
-    #         rows = cur.fetchall()
-    #         if len(rows) != 1:
-    #             print("Malformed results database!")
-    #             return False
-
-    #         row = rows[0]
-    #         version = row["version"]
-    #         if version != diaphora.VERSION_VALUE:
-    #             msg = "The version of the diff results is %s and current version is %s, there can be some incompatibilities."
-    #             print(msg % (version, diaphora.VERSION_VALUE))
-
-    #         main_db = row["main_db"]
-    #         diff_db = row["diff_db"]
-    #         if not os.path.exists(main_db):
-    #             log.error("Primary database %s not found." % main_db)
-    #             main_db = AskFile(0, main_db, "Select the primary database path")
-    #             if main_db is None:
-    #                 return False
-
-    #         if not os.path.exists(diff_db):
-    #             diff_db = AskFile(0, main_db, "Select the secondary database path")
-    #             if diff_db is None:
-    #                 return False
-
-    #         self.reinit(main_db, diff_db)
-
-    #         sql = "select * from results"
-    #         cur.execute(sql)
-    #         for row in diaphora.result_iter(cur):
-    #             if row["type"] == "best":
-    #                 choose = self.best_chooser
-    #             elif row["type"] == "partial":
-    #                 choose = self.partial_chooser
-    #             else:
-    #                 choose = self.unreliable_chooser
-
-    #             ea1 = int(row["address"], 16)
-    #             name1 = row["name"]
-    #             ea2 = int(row["address2"], 16)
-    #             name2 = row["name2"]
-    #             desc = row["description"]
-    #             ratio = float(row["ratio"])
-    #             bb1 = int(row["bb1"])
-    #             bb2 = int(row["bb2"])
-
-    #             choose.add_item(diaphora.CChooser.Item(ea1, name1, ea2, name2, desc, ratio, bb1, bb2))
-
-    #         sql = "select * from unmatched"
-    #         cur.execute(sql)
-    #         for row in diaphora.result_iter(cur):
-    #             if row["type"] == "primary":
-    #                 choose = self.unmatched_primary
-    #             else:
-    #                 choose = self.unmatched_second
-    #             choose.add_item(diaphora.CChooser.Item(int(row["address"], 16), row["name"]))
-
-    #         self.show_choosers()
-    #         return True
-    #     finally:
-    #         cur.close()
-    #         results_db.close()
-
-    #     return False
-
     def re_diff(self):
         self.best_chooser.Close()
         self.partial_chooser.Close()
@@ -1370,15 +919,6 @@ def _diff_or_export(function_filter = None, dbname = None, userdata = "", **opti
         bd.export(function_filter, userdata)
         log.info(f"Database exported: {opts.file_out}")
 
-        # if opts.file_in != "":
-        #     if os.getenv("DIAPHORA_PROFILE") is not None:
-        #         log.debug("*** Profiling diff ***")
-        #         import cProfile
-        #         profiler = cProfile.Profile()
-        #         profiler.runcall(bd.diff, opts.file_in)
-        #         profiler.print_stats(sort="time")
-        #     else:
-        #         bd.diff(opts.file_in)
     except Exception:
         log.exception(f"Exception while exporting DB {opts.file_out}")
 
@@ -1408,123 +948,6 @@ class BinDiffOptions:
         self.ignore_small_functions = kwargs.get('ignore_small_functions', False)
         # Enable, by default, exporting only function summaries for huge dbs.
         self.func_summaries_only = kwargs.get('func_summaries_only', total_functions > 100000)
-
-#-----------------------------------------------------------------------
-# class CHtmlDiff:
-#     """A replacement for difflib.HtmlDiff that tries to enforce a max width
-
-#     The main challenge is to do this given QTextBrowser's limitations. In
-#     particular, QTextBrowser only implements a minimum of CSS.
-#     """
-
-#     _html_template = """
-#     <html>
-#     <head>
-#     <style>%(style)s</style>
-#     </head>
-#     <body>
-#     <table class="diff_tab" cellspacing=0>
-#     %(rows)s
-#     </table>
-#     </body>
-#     </html>
-#     """
-
-#     _style = """
-#     table.diff_tab {
-#         font-family: Courier, monospace;
-#         table-layout: fixed;
-#         width: 100%;
-#     }
-#     table td {
-#         white-space: nowrap;
-#         overflow: hidden;
-#     }
-
-#     .diff_add {
-#         background-color: #aaffaa;
-#     }
-#     .diff_chg {
-#         background-color: #ffff77;
-#     }
-#     .diff_sub {
-#         background-color: #ffaaaa;
-#     }
-#     .diff_lineno {
-#         text-align: right;
-#         background-color: #e0e0e0;
-#     }
-#     """
-
-#     _row_template = """
-#     <tr>
-#         <td class="diff_lineno" width="auto">%s</td>
-#         <td class="diff_play" nowrap width="45%%">%s</td>
-#         <td class="diff_lineno" width="auto">%s</td>
-#         <td class="diff_play" nowrap width="45%%">%s</td>
-#     </tr>
-#     """
-
-#     _rexp_too_much_space = re.compile("^\t[.\\w]+ {8}")
-
-#     #-----------------------------------------------------------------------
-#     def make_file(self, lhs, rhs):
-#         rows = []
-#         for left, right, changed in difflib._mdiff(lhs, rhs):
-#                 lno, ltxt = left
-#                 rno, rtxt = right
-#                 ltxt = self._stop_wasting_space(ltxt)
-#                 rtxt = self._stop_wasting_space(rtxt)
-#                 ltxt = self._trunc(ltxt, changed).replace(" ", "&nbsp;")
-#                 rtxt = self._trunc(rtxt, changed).replace(" ", "&nbsp;")
-#                 row = self._row_template % (str(lno), ltxt, str(rno), rtxt)
-#                 rows.append(row)
-
-#         all_the_rows = "\n".join(rows)
-#         all_the_rows = all_the_rows.replace(
-#                     "\x00+", '<span class="diff_add">').replace(
-#                     "\x00-", '<span class="diff_sub">').replace(
-#                     "\x00^", '<span class="diff_chg">').replace(
-#                     "\x01", '</span>').replace(
-#                     "\t", 4 * "&nbsp;")
-
-#         res = self._html_template % {"style": self._style, "rows": all_the_rows}
-#         return res
-
-#     #-----------------------------------------------------------------------
-#     def _stop_wasting_space(self, s):
-#         """I never understood why you'd want to have 13 spaces between instruction and args'
-#         """
-#         m = self._rexp_too_much_space.search(s)
-#         if m:
-#             mlen = len(m.group(0))
-#             return s[:mlen-4] + s[mlen:]
-#         else:
-#             return s
-
-#     def _trunc(self, s, changed, max_col=120):
-#         if not changed:
-#                 return s[:max_col]
-
-#         # Don't count markup towards the length.
-#         outlen = 0
-#         push = 0
-#         for i, ch in enumerate(s):
-#                 if ch == "\x00": # Followed by an additional byte that should also not count
-#                         outlen -= 1
-#                         push = True
-#                 elif ch == "\x01":
-#                         push = False
-#                 else:
-#                         outlen += 1
-#                 if outlen == max_col:
-#                         break
-
-#         res = s[:i + 1]
-#         if push:
-#                 res += "\x01"
-
-#         return res
 
 #-----------------------------------------------------------------------
 def is_r2_file(filename):
@@ -1580,8 +1003,13 @@ def generate_db_for_file(filepath, override_if_existing = False, function_filter
         log.info(f"Generating database {dbname} for file {filepath}")
         _gen_diaphora_db(filepath, dbname, function_filter=function_filter)
 
+def compare_dbs(db1name, db2name):
+    bd = diaphora.CBinDiff(db1name)
+    bd.open_db()
+    bd.diff(db2name)
+    return bd.get_results()
 
-if __name__ == "__main__":
+def main():
     import argparse
 
     parser = argparse.ArgumentParser()

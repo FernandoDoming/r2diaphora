@@ -16,12 +16,12 @@ import sys
 import time
 import logging
 
-from idaapi_to_r2 import *
+from ..idaapi_to_r2 import *
 
 try:
-  from others.tarjan_sort import strongly_connected_components
+  from r2diaphora.others.tarjan_sort import strongly_connected_components
 except ImportError:
-  from tarjan_sort import strongly_connected_components
+  from r2diaphora.tarjan_sort import strongly_connected_components
 
 log = logging.getLogger("diaphora.graph_hashes")
 

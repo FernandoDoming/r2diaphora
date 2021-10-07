@@ -34,10 +34,10 @@ from io import StringIO
 from difflib import SequenceMatcher
 from multiprocessing import cpu_count
 
-from diaphora_heuristics import *
+from r2diaphora.diaphora_heuristics import *
 
-from jkutils.kfuzzy import CKoretFuzzyHashing
-from jkutils.factor import (FACTORS_CACHE, difference, difference_ratio,
+from r2diaphora.jkutils.kfuzzy import CKoretFuzzyHashing
+from r2diaphora.jkutils.factor import (FACTORS_CACHE, difference, difference_ratio,
                                                         primesbelow as primes)
 
 _log = logging.getLogger("diaphora")
