@@ -34,6 +34,7 @@ setup(
     },
 
     scripts=[
-        "scripts/r2diaphora-bulk"
+        "scripts/r2diaphora-bulk",
+        "scripts/r2diaphora-db"
     ]
 )

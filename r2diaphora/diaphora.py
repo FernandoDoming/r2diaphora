@@ -111,11 +111,19 @@ def debug_refresh(msg, show=False):
 
 #-------------------------------------------------------------------------------
 def get_db_attrs():
-    dirname = os.path.dirname(__file__)
-    f = open(os.path.join(dirname, "db.json"))
+    try:
+        f = open(get_db_attrs_path())
+    except FileNotFoundError:
+        _log.error("Database config file not found, have you run `r2diaphora-db config` ?")
+        exit(1)
+
     j = json.loads(f.read())
     f.close()
     return j
+
+def get_db_attrs_path():
+    dirname = os.path.dirname(__file__)
+    return os.path.join(dirname, "db.json")
 
 #-------------------------------------------------------------------------------
 def db_exists(dbname):
@@ -145,6 +153,27 @@ def drop_db(dbname):
     c = db.cursor(dictionary=True, buffered=True)
     c.execute(f"DROP DATABASE `{dbname}`")
     c.close()
+    db.close()
+
+def drop_all():
+    dbprops = get_db_attrs()
+    db = mysql.connector.connect(
+        host=dbprops.get("host", ""),
+        user=dbprops.get("user", ""),
+        password=dbprops.get("password", "")
+    )
+    cur = db.cursor(dictionary=True)
+    cur.execute("SHOW DATABASES")
+    dbs = cur.fetchall()
+    for _db in dbs:
+        dbname = _db["Database"]
+        if len(dbname) != 64:
+            log.debug(f"Skipping dropping DB {dbname}")
+            continue
+
+        log.info(f"Dropping DB {dbname}")
+        cur.execute(f"DROP DATABASE `{dbname}`")
+    cur.close()
     db.close()
 
 #-------------------------------------------------------------------------------

@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import json
+import argparse
+import r2diaphora
+
+def clean(args):
+    if args.name:
+        r2diaphora.drop_db(args.name)
+    elif args.all:
+        r2diaphora.drop_all()
+    else:
+        print(clean_parser.format_help())
+
+def config(args):
+    if (not args.print and
+        not args.user and
+        not args.password and
+        not args.host
+    ):
+        print(config_parser.format_help())
+        return
+
+    if args.print:
+        print(
+            json.dumps(r2diaphora.get_db_attrs())
+        )
+        return
+
+    if not os.path.isfile(r2diaphora.get_db_attrs_path()):
+        f = open(r2diaphora.get_db_attrs_path(), "w")
+        f.write("{}")
+        f.close()
+    
+    config = r2diaphora.get_db_attrs()
+    if args.user:
+        config["user"] = args.user
+    if args.password:
+        config["password"] = args.password
+    if args.host:
+        config["host"] = args.host
+
+    f = open(r2diaphora.get_db_attrs_path(), "w")
+    f.write(json.dumps(config))
+    f.close()
+
+parser = argparse.ArgumentParser()
+subparsers = parser.add_subparsers()
+clean_parser = subparsers.add_parser(
+    "clean",
+    help = "delete analysis databases"
+)
+clean_parser.add_argument(
+    "-n", "--name",
+    dest="name",
+    help="database name to drop"
+)
+clean_parser.add_argument(
+    "-a", "--all",
+    dest="all",
+    action="store_true",
+    help="delete ALL analysis databases"
+)
+clean_parser.set_defaults(func=clean)
+
+config_parser = subparsers.add_parser(
+    "config",
+    help = "configure credentials for the MySQL server"
+)
+config_parser.add_argument(
+    "-l", "--list",
+    dest="print",
+    action="store_true",
+    help="print current database config"
+)
+
+config_parser.add_argument(
+    "-u", "--user",
+    dest="user",
+    help="username to connect to the database with"
+)
+
+config_parser.add_argument(
+    "-p", "--password",
+    dest="password",
+    help="password to connect to the database with"
+)
+
+config_parser.add_argument(
+    "-hs", "--host",
+    dest="host",
+    help="host that acts as database server"
+)
+config_parser.set_defaults(func=config)
+args = parser.parse_args(sys.argv[1:])
+try:
+    args.func(args)
+except AttributeError:
+    print(parser.format_help())
