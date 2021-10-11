@@ -16,7 +16,7 @@ import sys
 import time
 import logging
 
-from ..idaapi_to_r2 import *
+from r2diaphora.idaapi.idaapi_to_r2 import *
 
 try:
   from r2diaphora.others.tarjan_sort import strongly_connected_components

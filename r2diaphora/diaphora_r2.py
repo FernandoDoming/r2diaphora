@@ -38,13 +38,13 @@ try:
 except ImportError:
     import _thread as thread
 
+import r2diaphora
 from r2diaphora import diaphora
 from r2diaphora.others.tarjan_sort import strongly_connected_components, robust_topological_sort
 from r2diaphora.jkutils.factor import primesbelow as primes
 from r2diaphora.jkutils.graph_hashes import CKoretKaramitasHash
 
-from r2diaphora.idaapi_to_r2 import *
-from r2diaphora.html_diff import *
+from r2diaphora.idaapi.idaapi_to_r2 import *
 
 LOG_FORMAT = "%(asctime)-15s [%(levelname)s] - %(message)s"
 log = logging.getLogger("diaphora.r2")
@@ -1108,5 +1108,8 @@ def main():
             output_name = args.o
         else:
             output_name = f"{db1name[0:10]}_vs_{db2name[0:10]}.html"
-        HtmlResults(matches, file1=args.file1, file2=args.file2).render(output_name)
+        r2diaphora.HtmlResults(matches, file1=args.file1, file2=args.file2).render(output_name)
         print(f"[+] Diff saved to {output_name}")
+
+if __name__ == "__main__":
+    main()

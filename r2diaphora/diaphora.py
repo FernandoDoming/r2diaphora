@@ -176,6 +176,19 @@ def drop_all():
     cur.close()
     db.close()
 
+def get_function_details(dbname, fname):
+    db_attrs = get_db_attrs()
+    db = mysql.connector.connect(
+        user=db_attrs["user"], password=db_attrs["password"],
+        host=db_attrs["host"], database=dbname
+    )
+    c = db.cursor(dictionary=True, buffered=True)
+    c.execute("SELECT * FROM functions WHERE name = %s", (fname, ))
+    details = c.fetchone()
+    c.close()
+    db.close()
+    return details
+
 #-------------------------------------------------------------------------------
 class CChooser():
     class Item:

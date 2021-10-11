@@ -9,7 +9,7 @@ import subprocess
 from subprocess import Popen
 from pycparser import CParser, c_ast
 
-from .jkutils.factor import primesbelow as primes
+from r2diaphora.jkutils.factor import primesbelow as primes
 from .instructions import CPU_INSTRUCTIONS
 
 LOG_FORMAT = "%(asctime)-15s [%(levelname)s] - %(message)s"
