@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name="r2diaphora",
-    version="0.1.1",
+    version="0.1.2",
     description="radare2 port of diaphora",
     url="https://github.com/FernandoDoming/r2diaphora",
     author="Fernando Domínguez",
@@ -20,7 +20,8 @@ setup(
         "colorama>=0.4.4",
         "yattag>=1.14.0",
         "mysql-connector-python>=8.0.26",
-        "python_magic>=0.4.24"
+        "python_magic>=0.4.24",
+        "pycparser>=2.20"
     ],
 
     classifiers=[
