@@ -1,8 +1,41 @@
+import os
+import shutil
+import glob
+
 from setuptools import setup
+from setuptools.command.install import install
+class CustomInstall(install):
+
+    def run(self):
+        install.run(self)
+        self.__post_install()
+
+    def __post_install(self):
+        for path in [
+            [".r2diaphora"],
+            [".r2diaphora", "signatures"],
+            [".r2diaphora", "signatures", "flirt"]
+        ]:
+            try:
+                os.makedirs(
+                    os.path.join(
+                        os.path.expanduser("~"), *path
+                    )
+                )
+            except FileExistsError:
+                pass
+
+        dirname  = os.path.dirname(__file__)
+        sigs_dir = os.path.join(dirname, "r2diaphora", "signatures", "flirt")
+        for f in glob.glob(f"{sigs_dir}/*.sig"):
+            shutil.copy2(
+                f,
+                os.path.join(os.path.expanduser("~"), ".r2diaphora", "signatures", "flirt")
+            )
 
 setup(
     name="r2diaphora",
-    version="0.1.2",
+    version="0.1.3",
     description="radare2 port of diaphora",
     url="https://github.com/FernandoDoming/r2diaphora",
     author="Fernando Domínguez",
@@ -12,7 +45,7 @@ setup(
         "r2diaphora",
         "r2diaphora.idaapi",
         "r2diaphora.jkutils",
-        "r2diaphora.others"
+        "r2diaphora.others",
     ],
     install_requires=[
         "chardet>=4.0.0",
@@ -38,5 +71,8 @@ setup(
     scripts=[
         "scripts/r2diaphora-bulk",
         "scripts/r2diaphora-db"
-    ]
+    ],
+
+    include_package_data=True,
+    cmdclass={"install": CustomInstall}
 )

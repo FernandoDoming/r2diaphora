@@ -967,9 +967,9 @@ def remove_file(filename):
 
 #-----------------------------------------------------------------------
 def scan_libs():
-    dirname  = os.path.dirname(__file__)
-    sigs_dir = os.path.join(dirname, "signatures", "flirt")
-    log_exec_r2_cmd(f"zfs {sigs_dir}/*.sig")
+    sigs_dir = os.path.join(os.path.expanduser("~"), ".r2diaphora", "signatures", "flirt")
+    if os.path.isdir(sigs_dir):
+        log_exec_r2_cmd(f"zfs {sigs_dir}/*.sig")
 
 def _gen_diaphora_db(
         input_path: str,
