@@ -1073,9 +1073,9 @@ def main():
         "ghidra": "pdg",
         "pdc": "pdc"
     }
-    
+
     g_bindiff_opts["decompiler_command"] = decompiler_commands.get(args.decompiler)
-    g_bindiff_opts["use_decompiler"] = args.no_decompiler
+    g_bindiff_opts["use_decompiler"] = not args.no_decompiler
 
     db1name = dbname_for_file(args.file1)
     bd = diaphora.CBinDiff(db1name)

@@ -215,6 +215,23 @@ class HtmlResults():
                                 with tag("tr", klass="nohover"):
                                     with tag("td", colspan=12, klass="hidden-row"):
                                         with tag("div", klass="accordion-body collapse", id=f"diff-{i}"):
+                                            details1 = get_function_details(self.get_file_hash(self.file1), r["name"])
+                                            pseudo1 = None
+                                            if details1["prototype"] and details1["pseudocode"]:
+                                                pseudo1 = details1["prototype"] + "\n" + details1["pseudocode"]
+                                            details2 = get_function_details(self.get_file_hash(self.file2), r["name2"])
+                                            pseudo2 = None
+                                            if details2["prototype"] and details2["pseudocode"]:
+                                                pseudo2 = details2["prototype"] + "\n" + details2["pseudocode"]
+
+                                            changes = []
+                                            if pseudo1 and pseudo2:
+                                                diff = DifflibParser(
+                                                    [f"{l}\n" for l in pseudo1.split("\n")],
+                                                    [f"{l}\n" for l in pseudo2.split("\n")],
+                                                )
+                                                changes = [d for d in diff]
+
                                             # Tabs
                                             with tag("nav", klass="nav nav-pills justify-content-center", style="margin-bottom: 20px;"):
                                                 for j, tab in enumerate(["Pseudocode", "Assembly", "Callgraph"]):
@@ -225,22 +242,15 @@ class HtmlResults():
                                                         text(tab)
                                             # Tabs content
                                             with tag("div", klass="tab-content"):
-                                                details1 = get_function_details(self.get_file_hash(self.file1), r["name"])
-                                                pseudo1 = details1["prototype"] + "\n" + details1["pseudocode"]
-                                                details2 = get_function_details(self.get_file_hash(self.file2), r["name2"])
-                                                pseudo2 = details2["prototype"] + "\n" + details2["pseudocode"]
-
-                                                diff = DifflibParser(
-                                                    [f"{l}\n" for l in pseudo1.split("\n")],
-                                                    [f"{l}\n" for l in pseudo2.split("\n")],
-                                                )
-                                                changes = [d for d in diff]
-
                                                 for j, tab in enumerate(["Pseudocode", "Assembly", "Callgraph"]):
                                                     cls = "tab-pane"
                                                     if j == 0:
                                                         cls += " active"
+
                                                     if tab == "Pseudocode":
+                                                        if not pseudo1 or not pseudo2:
+                                                            cls += " disabled"
+
                                                         with tag("div", klass=cls, id=f"diff-{i}-{tab.lower()}"):
                                                             with tag("div", klass="row"):
                                                                 for side in [DiffCode.LEFTONLY, DiffCode.RIGHTONLY]:
