@@ -11,15 +11,14 @@ Quoting from the original repository:
 ## Setup
 
 0. r2diaphora requires radare2 to be installed in the local machine and a valid connection to a MySQL server. If you don't have either of those refer to the respective software manual on how to install them.
-1. Clone this repo
-2. Fill in your MySQL credentials in `db.json`
+1. Install it with `pip install r2diaphora`
+2. Run `r2diaphora-db config -u <user> -p <password> -hs <host>` to fill database credentials
 3. (Optional) Install r2ghidra with `r2pm -ci r2ghidra`. Optionally you can use `pdc` (`-d pdc`) or no decompiler at all (`-nd`)
-4. Install requirements (`pip install -r requirements.txt`)
 
 ## Usage
 
 ```
-usage: diaphora_r2.py [-h] [-f] [-nbbs NBBS] [-o O] [-d {pdc,ghidra}] [-nd] [-a] file1 [file2]
+usage: r2diaphora [-h] [-f] [-nbbs NBBS] [-o O] [-d {pdc,ghidra}] [-nd] [-a] file1 [file2]
 
 positional arguments:
   file1                 File to analyze
@@ -37,8 +36,19 @@ optional arguments:
 ```
 
 ```
-./analyze_bulk.py -h
-usage: analyze_bulk.py [-h] [-f] [-a] files [files ...]
+usage: r2diaphora-db [-h] {clean,config} ...
+
+positional arguments:
+  {clean,config}
+    clean         delete analysis databases
+    config        configure credentials for the MySQL server
+
+optional arguments:
+  -h, --help      show this help message and exit
+```
+
+```
+usage: r2diaphora-bulk [-h] [-f] [-a] files [files ...]
 
 positional arguments:
   files       Files to analyze
