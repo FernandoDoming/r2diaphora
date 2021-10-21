@@ -134,7 +134,7 @@ class CAstVisitor(c_ast.NodeVisitor):
         """
         dirname  = os.path.dirname(__file__)
         libdir = os.path.abspath(
-            os.path.join(dirname, "pycparser", "fake_libc_include")
+            os.path.join(dirname, "..", "pycparser", "fake_libc_include")
         )
         parser = CParser()
 
