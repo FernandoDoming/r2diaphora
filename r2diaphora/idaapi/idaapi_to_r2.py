@@ -298,13 +298,24 @@ def no_ret_functions():
     return _no_ret_fns
 
 _all_fns = None
-def get_all_fns():
+def get_all_fns(exclude_libs = False):
     global _all_fns
     if _all_fns:
-        return _all_fns
+        if exclude_libs:
+            return [fn for fn in _all_fns if not fn["name"].startswith("flirt.")]
+        else:
+            return _all_fns
 
     _all_fns = log_exec_r2_cmdj("aflj")
-    return _all_fns
+    if exclude_libs:
+        return [fn for fn in _all_fns if not fn["name"].startswith("flirt.")]
+    else:
+        return _all_fns
+
+def scan_libs():
+    sigs_dir = os.path.join(os.path.expanduser("~"), ".r2diaphora", "signatures", "flirt")
+    if os.path.isdir(sigs_dir):
+        log_exec_r2_cmd(f"zfs {sigs_dir}/*.sig")
 
 def get_function_name(ea):
     try:
@@ -328,6 +339,20 @@ def test_addr_within_function(f, ea):
 #-----------------------------------------------------------------------
 def get_arch():
     return log_exec_r2_cmdj("ij").get("bin", {}).get("arch")
+
+#-----------------------------------------------------------------------
+def strings():
+    return log_exec_r2_cmdj("izj")
+
+def string_values(min_str_len = 1):
+    r2_strs = strings()
+    strs = set()
+    for s in r2_strs:
+        v = s["string"]
+        if len(v) >= min_str_len:
+            strs.add(v)
+    return list(strs)
+
 
 #-----------------------------------------------------------------------
 def block_succs(addr):
@@ -622,7 +647,7 @@ def Names():
     return res
 
 #-----------------------------------------------------------------------
-def r2_open(input_path):
+def r2_open(input_path, ident_libs = False):
     global r2
     r2 = r2pipe.open(f"ccall://{input_path}", flags=["-2", "-q"])
     r2.use_cache = True
@@ -647,6 +672,8 @@ def r2_open(input_path):
     # and does not load it automatically
     ext = dll_extensions.get(platform.system())
     r2.cmd(f"L {os.path.expanduser('~/.local/share/radare2/plugins/core_ghidra.' + ext)}")
+    if ident_libs:
+        scan_libs()
 
 def r2_close():
     global r2
