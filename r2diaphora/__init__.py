@@ -9,6 +9,4 @@ from .diaphora import (
 from .idaapi.idaapi_to_r2 import get_all_fns, strings, string_values, r2_open, r2_close
 from .html_diff import HtmlResults
 
-def version():
-    return __version__
 

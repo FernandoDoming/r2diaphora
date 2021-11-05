@@ -122,8 +122,9 @@ def get_db_attrs():
     return j
 
 def get_db_attrs_path():
-    dirname = os.path.dirname(__file__)
-    return os.path.join(dirname, "db.json")
+    return os.path.join(
+        os.path.expanduser("~"), ".r2diaphora", "db.json"
+    )
 
 #-------------------------------------------------------------------------------
 def db_exists(dbname):
