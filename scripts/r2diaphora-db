@@ -67,7 +67,7 @@ clean_parser.set_defaults(func=clean)
 
 config_parser = subparsers.add_parser(
     "config",
-    help = "configure credentials for the MySQL server"
+    help = "configure credentials for the MariaDB server"
 )
 config_parser.add_argument(
     "-l", "--list",
