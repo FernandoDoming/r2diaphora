@@ -40,8 +40,8 @@ from r2diaphora.jkutils.kfuzzy import CKoretFuzzyHashing
 from r2diaphora.jkutils.factor import (FACTORS_CACHE, difference, difference_ratio,
                                                         primesbelow as primes)
 
-_log = logging.getLogger("diaphora")
-_log.setLevel(logging.DEBUG)
+log = logging.getLogger("diaphora")
+log.setLevel(logging.INFO)
 
 #-------------------------------------------------------------------------------
 VERSION_VALUE = "2.0.6"
@@ -97,24 +97,11 @@ def ast_ratio(ast1, ast2):
     return difference_ratio(decimal.Decimal(ast1), decimal.Decimal(ast2))
 
 #-------------------------------------------------------------------------------
-def log(msg):
-    print(("[%s] %s" % (time.asctime(), msg)))
-
-#-------------------------------------------------------------------------------
-def log_refresh(msg, show=False, do_log=True):
-    print(msg)
-
-#-------------------------------------------------------------------------------
-def debug_refresh(msg, show=False):
-    if os.getenv("DIAPHORA_DEBUG"):
-        log(msg)
-
-#-------------------------------------------------------------------------------
 def get_db_attrs():
     try:
         f = open(get_db_attrs_path())
     except FileNotFoundError:
-        _log.error("Database config file not found, have you run `r2diaphora-db config` ?")
+        log.error("Database config file not found, have you run `r2diaphora-db config` ?")
         exit(1)
 
     j = json.loads(f.read())
@@ -169,7 +156,7 @@ def drop_all():
     for _db in dbs:
         dbname = _db["Database"]
         if len(dbname) != 64:
-            log.debug(f"Skipping dropping DB {dbname}")
+            log.info(f"Skipping dropping DB {dbname}")
             continue
 
         log.info(f"Dropping DB {dbname}")
@@ -713,7 +700,7 @@ class CBinDiff:
 
     def save_function(self, props):
         if props == False:
-            log("WARNING: Trying to save a non resolved function?")
+            log.warning("WARNING: Trying to save a non resolved function?")
             return
 
         # Phase 1: Fix data types and insert the function row.
@@ -836,7 +823,7 @@ class CBinDiff:
                         cur_execute(sql, (bb_ids[key], bb_ids[bb]))
                     except:
                         # key doesnt exist because it doesnt have forward references to any bb
-                        log("Error: %s" % str(sys.exc_info()[1]))
+                        log.exception()
 
             # And finally insert the functions to basic blocks relations
             sql = "insert into function_bblocks (function_id, basic_block_id) values (%s, %s)"
@@ -1085,7 +1072,7 @@ class CBinDiff:
 
             if cg1 == cg2:
                 self.equal_callgraph = True
-                log("Callgraph signature for both databases is equal, the programs seem to be 100% equal structurally")
+                log.info("Callgraph signature for both databases is equal, the programs seem to be 100% equal structurally")
                 Warning("Callgraph signature for both databases is equal, the programs seem to be 100% equal structurally")
             else:
                 FACTORS_CACHE[cg1] = cg_factors1
@@ -1093,13 +1080,13 @@ class CBinDiff:
                 diff = difference(cg1, cg2)
                 total = sum(cg_factors1.values())
                 if total == 0 or diff == 0:
-                    log("Callgraphs are 100% equal")
+                    log.info("Callgraphs are 100% equal")
                 else:
                     percent = diff * 100. / total
                     if percent >= 100:
-                        log("Callgraphs are absolutely different")
+                        log.info("Callgraphs are absolutely different")
                     else:
-                        log("Callgraphs from both programs differ in %f%%" % percent)
+                        log.info("Callgraphs from both programs differ in %f%%", percent)
 
         cur.close()
 
@@ -1162,7 +1149,7 @@ class CBinDiff:
 
         for heur in heuristics:
             if len(self.matched1) == self.total_functions1 or len(self.matched2) == self.total_functions2:
-                log("All functions matched in at least one database, finishing.")
+                log.info("All functions matched in at least one database, finishing.")
                 break
 
             category = heur["category"]
@@ -1178,11 +1165,11 @@ class CBinDiff:
 
             flags = heur["flags"]
             if flags & HEUR_FLAG_UNRELIABLE == HEUR_FLAG_UNRELIABLE and not self.unreliable:
-                log_refresh("Skipping unreliable heuristic '%s'" % name)
+                log.debug("Skipping unreliable heuristic '%s'", name)
                 continue
 
             if flags & HEUR_FLAG_SLOW == HEUR_FLAG_SLOW and not self.slow_heuristics:
-                log_refresh("Skipping slow heuristic '%s'" % name)
+                log.debug("Skipping slow heuristic '%s'", name)
                 continue
 
             if arg_category == "Unreliable":
@@ -1192,7 +1179,7 @@ class CBinDiff:
                 best = self.best_chooser
                 partial = self.partial_chooser
 
-            log_refresh("%s Finding with heuristic '%s'" % (mode, name))
+            log.debug("%s Finding with heuristic '%s'", mode, name)
             sql = sql.replace("$DIFF$", f"`{self.last_diff_db}`")
             sql = sql.replace("$MAIN$", f"`{self.db_name}`")
             sql = sql.replace("$POSTFIX$", postfix)
@@ -1222,16 +1209,16 @@ class CBinDiff:
             while len(threads_list) >= total_cpus:
                 for i, t in enumerate(threads_list):
                     if not t.is_alive():
-                        debug_refresh("[Parallel] Heuristic '%s' took %f..." % (t.name, time.monotonic() - t.time))
+                        log.debug("[Parallel] Heuristic '%s' took %f...", t.name, time.monotonic() - t.time)
                         del threads_list[i]
-                        debug_refresh("[Parallel] Waiting for any of %d thread(s) running to finish..." % len(threads_list))
+                        log.debug("[Parallel] Waiting for any of %d thread(s) running to finish...", len(threads_list))
                         break
                     else:
-                        log_refresh("[Parallel] %d thread(s) running, waiting for at least one to finish..." % len(threads_list), do_log=False)
+                        log.info("[Parallel] %d thread(s) running, waiting for at least one to finish...", len(threads_list))
                         t.join(0.1)
 
         if len(threads_list) > 0:
-            log_refresh("[Parallel] Waiting for remaining %d thread(s) to finish..." % len(threads_list), do_log=False)
+            log.info("[Parallel] Waiting for remaining %d thread(s) to finish...", len(threads_list))
 
             do_cancel = False
             times = 0
@@ -1240,16 +1227,16 @@ class CBinDiff:
                 for i, t in enumerate(threads_list):
                     t.join(0.1)
                     if not t.is_alive():
-                        debug_refresh("[Parallel] Heuristic '%s' took %f..." % (t.name, time.monotonic() - t.time))
+                        log.debug("[Parallel] Heuristic '%s' took %f...", t.name, time.monotonic() - t.time)
                         del threads_list[i]
-                        debug_refresh("[Parallel] Waiting for remaining %d thread(s) to finish..." % len(threads_list))
+                        log.debug("[Parallel] Waiting for remaining %d thread(s) to finish...", len(threads_list))
                         break
 
                     t.join(0.1)
                     if time.monotonic() - t.time > TIMEOUT_LIMIT:
                         do_cancel = True
                         try:
-                            log_refresh("Timeout, cancelling queries...")
+                            log.info("Timeout, cancelling queries...")
                             self.interrupt()
                             for i, t in enumerate(threads_list):
                                 if t.is_alive():
@@ -1261,7 +1248,7 @@ class CBinDiff:
                     names = []
                     for x in threads_list:
                         names.append(x.name)
-                    log_refresh("[Parallel] %d thread(s) still running:\n\n%s" % (len(threads_list), ", ".join(names)))
+                    log.info("[Parallel] %d thread(s) still running:\n\n%s", len(threads_list), ", ".join(names))
 
     def ast_ratio(self, ast1, ast2):
         if not self.relaxed_ratio:
@@ -1288,7 +1275,7 @@ class CBinDiff:
             tmp1 = self.get_cmp_pseudo_lines(pseudo1)
             tmp2 = self.get_cmp_pseudo_lines(pseudo2)
             if tmp1 == "" or tmp2 == "":
-                log("Error cleaning pseudo-code!")
+                log.error("Error cleaning pseudo-code!")
             else:
                 v1 = fratio(tmp1, tmp2)
                 v1 = float(decimal_values.format(v1))
@@ -1349,19 +1336,19 @@ class CBinDiff:
         try:
             cur.execute(sql)
         except:
-            log("Error: %s" % str(sys.exc_info()[1]))
+            log.exception()
             return
 
         i = 0
         t = time.monotonic()
         while self.max_processed_rows == 0 or (self.max_processed_rows != 0 and i < self.max_processed_rows):
             if time.monotonic() - t > self.timeout:
-                log("Timeout")
+                log.info("Timeout")
                 break
 
             i += 1
             if i % 50000 == 0:
-                log("Processed %d rows..." % i)
+                log.info("Processed %d rows...", i)
             row = cur.fetchone()
             if row is None:
                 break
@@ -1426,19 +1413,19 @@ class CBinDiff:
         try:
             cur.execute(sql)
         except:
-            log("Error: %s" % str(sys.exc_info()[1]))
+            log.exception()
             return
 
         i = 0
         t = time.monotonic()
         while self.max_processed_rows == 0 or (self.max_processed_rows != 0 and i < self.max_processed_rows):
             if time.monotonic() - t > self.timeout:
-                log("Timeout")
+                log.info("Timeout")
                 break
 
             i += 1
             if i % 50000 == 0:
-                log("Processed %d rows..." % i)
+                log.info("Processed %d rows...", i)
             row = cur.fetchone()
             if row is None:
                 break
@@ -1498,12 +1485,12 @@ class CBinDiff:
         t = time.monotonic()
         while self.max_processed_rows == 0 or (self.max_processed_rows != 0 and i < self.max_processed_rows):
             if time.monotonic() - t > self.timeout:
-                log("Timeout")
+                log.info("Timeout")
                 break
 
             i += 1
             if i % 50000 == 0:
-                log("Processed %d rows..." % i)
+                log.info("Processed %d rows...", i)
 
             row = cur.fetchone()
             if row is None:
@@ -1574,14 +1561,14 @@ class CBinDiff:
         try:
             cur.execute(sql)
         except:
-            log("Error: %s" % str(sys.exc_info()[1]))
+            log.exception()
             return
 
         i = 0
         while 1:
             i += 1
             if i % 1000 == 0:
-                log("Processed %d rows..." % i)
+                log.info("Processed %d rows...", i)
             row = cur.fetchone()
             if row is None:
                 break
@@ -1707,7 +1694,7 @@ class CBinDiff:
                                 and f.name not like 'nullsub_%'"""
         
         desc = "Perfect match, same name"
-        log_refresh("Finding with heuristic '%s'" % desc)
+        log.info("Finding with heuristic '%s'", desc)
         cur.execute(sql)
         rows = cur.fetchall()
         cur.close()
@@ -1863,7 +1850,7 @@ class CBinDiff:
         # the same program has id + 1, then, in program P2, function B maybe
         # the next function to A in P2.
 
-        log_refresh("Finding with heuristic 'Call address sequence'")
+        log.debug("Finding with heuristic 'Call address sequence'")
         cur = self.db_cursor()
         try:
             # Create a copy of all the functions
@@ -1956,12 +1943,12 @@ class CBinDiff:
         while len(the_items) > 0:
             total_dones += 1
             if total_dones % 1000 == 0:
-                log("Processed %d callgraph matches..." % total_dones)
+                log.info("Processed %d callgraph matches...", total_dones)
 
                 curr_best_matches = len(self.best_chooser.items)
                 curr_part_matches = len(self.partial_chooser.items)
                 fmt = "Queued item(s) %d, Best matches %d, Partial Matches %d (Previously %d and %d)"
-                log(fmt % (len(the_items), curr_best_matches, curr_part_matches, prev_best_matches, prev_part_matches))
+                log.info(fmt % (len(the_items), curr_best_matches, curr_part_matches, prev_best_matches, prev_part_matches))
 
             match = the_items.pop()
             ea1 = match[1]
@@ -1999,7 +1986,7 @@ class CBinDiff:
 
         # Search using some of the previous criterias but calculating the
         # edit distance
-        log_refresh("Finding with heuristic 'Small names difference'")
+        log.debug("Finding with heuristic 'Small names difference'")
         self.search_small_differences(self.partial_chooser)
 
     def find_brute_force(self):
@@ -2051,14 +2038,14 @@ class CBinDiff:
                                 or (f.kgh_hash = df.kgh_hash
                                 and f.kgh_hash > 7 and df.kgh_hash > 7))"""
         cur.execute(sql)
-        log_refresh("Finding via brute-forcing...")
+        log.debug("Finding via brute-forcing...")
         self.add_matches_from_cursor_ratio_max(cur, self.unreliable_chooser, None, 0.5)
 
     def find_experimental_matches(self):
         self.run_heuristics_for_category("Experimental")
 
         # Find using brute-force
-        log_refresh("Brute-forcing...")
+        log.debug("Brute-forcing...")
         self.find_brute_force()
 
     def find_unreliable_matches(self):
@@ -2196,7 +2183,7 @@ class CBinDiff:
                 l.insert(0, 'secondary')
                 cur.execute(unmatched_sql, l)
 
-            log("Diffing results saved in DB '%s'." % filename)
+            log.info("Diffing results saved in DB '%s'.", filename)
         finally:
             results_db.commit()
             cur.close()
@@ -2214,42 +2201,36 @@ class CBinDiff:
         try:
             cur.execute(f"select value from `{self.last_diff_db}`.version")
         except:
-            log("Error: %s " % sys.exc_info()[1])
-            log("The selected file does not look like a valid Diaphora exported database!")
+            log.exception("The selected file does not look like a valid Diaphora exported database!")
             cur.close()
             return False
 
         row = cur.fetchone()
         if not row:
-            log("Invalid database!")
+            log.error("Invalid database!")
             return False
 
         if row["value"] != VERSION_VALUE:
-            log("WARNING: The database is from a different version (current %s, database %s)!" % (VERSION_VALUE, row[0]))
+            log.warning("WARNING: The database is from a different version (current %s, database %s)!", VERSION_VALUE, row[0])
 
         try:
             t0 = time.monotonic()
-            log_refresh("Diffing...", True)
+            log.debug("Diffing...")
 
             self.do_continue = True
             if self.equal_db():
-                log("The databases seems to be 100% equal")
+                log.info("The databases seems to be 100% equal")
 
             if self.do_continue:
                 # Compare the call graphs
                 self.check_callgraph()
 
-                if self.project_script is not None:
-                    log("Loading project specific Python script...")
-                    if not self.load_hooks():
-                        return False
-
                 # Find the unmodified functions
-                log_refresh("Finding best matches...")
+                log.debug("Finding best matches...")
                 self.find_equal_matches_parallel()
 
                 # Find the modified functions
-                log_refresh("Finding partial matches")
+                log.debug("Finding partial matches")
                 self.find_matches_parallel()
 
                 # Call address sequence heuristic
@@ -2258,39 +2239,34 @@ class CBinDiff:
 
                 if self.slow_heuristics:
                     # Find the functions from the callgraph
-                    log_refresh("Finding with heuristic 'Callgraph matches'")
+                    log.debug("Finding with heuristic 'Callgraph matches'")
                     self.find_callgraph_matches()
 
                 if self.unreliable:
                     # Find using likely unreliable methods modified functions
-                    log_refresh("Finding probably unreliable matches")
+                    log.debug("Finding probably unreliable matches")
                     self.find_unreliable_matches()
 
                 if self.experimental:
                     # Find using experimental methods modified functions
-                    log_refresh("Finding experimental matches")
+                    log.debug("Finding experimental matches")
                     self.find_from_matches(self.partial_chooser.items)
                     self.find_experimental_matches()
 
                 # Show the list of unmatched functions in both databases
-                log_refresh("Finding unmatched functions")
+                log.debug("Finding unmatched functions")
                 self.find_unmatched()
 
                 if self.hooks is not None:
                     if 'on_finish' in dir(self.hooks):
                         self.hooks.on_finish()
 
-                log("Done. Took {} seconds.".format(time.monotonic() - t0))
+                log.info("Done. Took {} seconds.".format(time.monotonic() - t0))
         finally:
             cur.close()
         return True
 
 if __name__ == "__main__":
-    version_info = sys.version_info
-    if version_info[0] == 2:
-        log("WARNING: You are using Python 2 instead of Python 3. The main branch of Diaphora works exclusively with Python 3.")
-        log("TIP: There are other branches that contain backward compatability.")
-
     parser = argparse.ArgumentParser()
     parser.add_argument("db1")
     parser.add_argument("db2")
