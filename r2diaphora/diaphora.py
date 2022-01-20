@@ -821,8 +821,11 @@ class CBinDiff:
                     key = str(key)
                     try:
                         cur_execute(sql, (bb_ids[key], bb_ids[bb]))
-                    except:
+                    except KeyError:
                         # key doesnt exist because it doesnt have forward references to any bb
+                        # we can safely ignore this error
+                        pass
+                    except Exception:
                         log.exception()
 
             # And finally insert the functions to basic blocks relations
