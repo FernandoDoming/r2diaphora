@@ -354,8 +354,8 @@ class CBinDiff:
 
         tid = threading.current_thread().ident
         self.dbs_dict[tid] = db
+        self.db = db
         if isinstance(threading.current_thread(), threading._MainThread):
-            self.db = db
             self.create_schema()
             self.create_indexes()
             self.db.commit()
@@ -706,6 +706,10 @@ class CBinDiff:
         # Phase 1: Fix data types and insert the function row.
         cur = self.db_cursor()
         new_props = []
+
+        sql = f"""use `{self.db_name}`"""
+        cur.execute(sql)
+
         # The last 4 fields are callers, callees, basic_blocks_data & bb_relations
         for prop in props[:len(props)-4]:
             # XXX: Fixme! This is a hack for 64 bit architectures kernels
