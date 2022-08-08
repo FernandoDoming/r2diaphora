@@ -723,21 +723,26 @@ class CBinDiff:
             else:
                 new_props.append(prop)
 
-        sql = """insert into functions (name, nodes, edges, indegree, outdegree, size,
-                                                                        instructions, mnemonics, names, prototype,
-                                                                        cyclomatic_complexity, primes_value, address,
-                                                                        comment, mangled_function, bytes_hash, pseudocode,
-                                                                        pseudocode_lines, pseudocode_hash1, pseudocode_primes,
-                                                                        function_flags, assembly, prototype2, pseudocode_hash2,
-                                                                        pseudocode_hash3, strongly_connected, loops, rva,
-                                                                        tarjan_topological_sort, strongly_connected_spp,
-                                                                        clean_assembly, clean_pseudo, mnemonics_spp, switches,
-                                                                        function_hash, bytes_sum, md_index, constants,
-                                                                        constants_count, segment_rva, assembly_addrs, kgh_hash,
-                                                                        userdata)
-                                                                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                                                                                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                                                                                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+        self.ensure_safe_props(new_props)
+        sql = """
+        insert into functions (name, nodes, edges, indegree, outdegree, size,
+                instructions, mnemonics, names, prototype,
+                cyclomatic_complexity, primes_value, address,
+                comment, mangled_function, bytes_hash, pseudocode,
+                pseudocode_lines, pseudocode_hash1, pseudocode_primes,
+                function_flags, assembly, prototype2, pseudocode_hash2,
+                pseudocode_hash3, strongly_connected, loops, rva,
+                tarjan_topological_sort, strongly_connected_spp,
+                clean_assembly, clean_pseudo, mnemonics_spp, switches,
+                function_hash, bytes_sum, md_index, constants,
+                constants_count, segment_rva, assembly_addrs, kgh_hash,
+                userdata)
+        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s)
+        """
 
         try:
             cur.execute(sql, new_props)
@@ -775,11 +780,13 @@ class CBinDiff:
             # The last 2 fields are basic_blocks_data & bb_relations
             bb_data, bb_relations = props[len(props)-2:]
             instructions_ids = {}
-            sql = """insert into instructions (address, mnemonic, disasm,
-                                                                                            comment1, comment2, name,
-                                                                                            type, pseudocomment,
-                                                                                            pseudoitp)
-                                                                values (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+            sql = """
+            insert into instructions (address, mnemonic, disasm,
+                comment1, comment2, name,
+                type, pseudocomment,
+                pseudoitp)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
             self_get_instruction_id = self.get_instruction_id
             cur_execute = cur.execute
             for key in bb_data:
@@ -839,6 +846,44 @@ class CBinDiff:
                 cur_execute(sql, (func_id, bb_id))
 
         cur.close()
+
+    def ensure_safe_props(self, props):
+        size_limits = [
+            ("name", 1024),
+            ("mangled_function", 1024),
+            ("prototype", 1024),
+            ("prototype2", 1024),
+        ]
+        for size_limit in size_limits:
+            idx = self.get_fn_prop_index(size_limit[0])
+            if idx == -1:
+                continue
+            props[idx] = props[idx][0:size_limit[1]]
+
+    def get_fn_prop_index(self, key):
+        keys = self.get_fn_prop_keys()
+        idx = -1
+        try:
+            idx = keys.index(key)
+        except ValueError:
+            pass
+        return idx
+
+    def get_fn_prop_keys(self):
+        return [
+            "name", "nodes", "edges", "indegree", "outdegree", "size",
+            "instructions", "mnemonics", "names", "prototype",
+            "cyclomatic_complexity", "primes_value", "address",
+            "comment", "mangled_function", "bytes_hash", "pseudocode",
+            "pseudocode_lines", "pseudocode_hash1", "pseudocode_primes",
+            "function_flags", "assembly", "prototype2", "pseudocode_hash2",
+            "pseudocode_hash3", "strongly_connected", "loops", "rva",
+            "tarjan_topological_sort", "strongly_connected_spp",
+            "clean_assembly", "clean_pseudo", "mnemonics_spp", "switches",
+            "function_hash", "bytes_sum", "md_index", "constants",
+            "constants_count", "segment_rva", "assembly_addrs", "kgh_hash",
+            "userdata"
+        ]
 
     def get_valid_definition(self, defs):
         """ Try to get a valid structure definition by removing (yes) the 
@@ -1023,21 +1068,23 @@ class CBinDiff:
             except KeyError:
                 bb_blocks[bb_ea] = [ [ins_ea, mnem, dis] ]
 
-        sql = """ select (select address
-                                            from %s.basic_blocks
-                             where id = bbr.parent_id) ea1,
-                                     (select address
-                                            from %s.basic_blocks
-                             where id = bbr.child_id) ea2
-                            from %s.bb_relations bbr,
-                                     %s.function_bblocks fbs,
-                                     %s.basic_blocks bbs,
-                                     %s.functions f
-                         where f.id = fbs.function_id
-                             and bbs.id = fbs.basic_block_id
-                             and fbs.basic_block_id = bbr.child_id
-                             and f.address = %s
-                         order by 1 asc, 2 asc""" % (db, db, db, db, db, db)
+        sql = """
+        select (select address
+            from %s.basic_blocks
+            where id = bbr.parent_id) ea1,
+                        (select address
+                            from %s.basic_blocks
+            where id = bbr.child_id) ea2
+            from %s.bb_relations bbr,
+                        %s.function_bblocks fbs,
+                        %s.basic_blocks bbs,
+                        %s.functions f
+            where f.id = fbs.function_id
+                and bbs.id = fbs.basic_block_id
+                and fbs.basic_block_id = bbr.child_id
+                and f.address = %s
+            order by 1 asc, 2 asc
+        """ % (db, db, db, db, db, db)
         cur.execute(sql, (str(ea1), ))
         rows = result_iter(cur)
 
