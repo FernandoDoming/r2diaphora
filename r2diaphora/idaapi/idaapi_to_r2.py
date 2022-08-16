@@ -468,7 +468,11 @@ def GetOperandValue(ea, n):
 #-----------------------------------------------------------------------
 def r2_get_imagebase():
     #ep = ((int(r2.cmd("ieq"), 16) >> 24) << 24)
-    ep = int(log_exec_r2_cmd("ia~baddr[1]"), 16)
+    ep = None
+    try:
+        ep = int(log_exec_r2_cmd("ia~baddr[1]"), 16)
+    except:
+        pass
     return ep
 
 #-----------------------------------------------------------------------

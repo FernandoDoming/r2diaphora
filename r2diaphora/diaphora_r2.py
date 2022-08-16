@@ -26,17 +26,12 @@ import re
 import sys
 import time
 import json
+import signal
 import decimal
 import difflib
-import threading
 import logging
 from logging.handlers import RotatingFileHandler
 from hashlib import md5, sha256
-
-try:
-    import thread
-except ImportError:
-    import _thread as thread
 
 import r2diaphora
 from r2diaphora import diaphora
@@ -81,31 +76,8 @@ more than 100,000 functions.<br><br>
 You can disable it by un-checking the 'Do not export basic blocks<br>
 or instructions' option."""
 
-
-#-----------------------------------------------------------------------
-def cdquit(fn_name):
-    # print to stderr, unbuffered in Python 2.
-    print('[-] Timeout: {0} took too long'.format(fn_name), file=sys.stderr)
-    sys.stderr.flush() # Python 3 stderr is likely buffered.
-    thread.interrupt_main() # raises KeyboardInterrupt
-
-def timeout(s):
-    '''
-    use as decorator to exit process if 
-    function takes longer than s seconds
-    '''
-    def outer(fn):
-        def inner(*args, **kwargs):
-            timer = threading.Timer(s, cdquit, args=[fn.__name__])
-            timer.start()
-            try:
-                result = fn(*args, **kwargs)
-            finally:
-                timer.cancel()
-            return result
-        return inner
-    return outer
-
+def raise_timeout(signum, frame):
+    raise TimeoutError
 
 #-----------------------------------------------------------------------
 g_bindiff_opts = {
@@ -149,7 +121,7 @@ class CIDABinDiff(diaphora.CBinDiff):
         i = 0
         for func in func_list:
             log.debug("PROPS FOR FUNC cur %s" % (func))
-            props = self.read_function(func)
+            props = self.read_function_with_timeout(func, timeout = 60)
             if not props:
                 i += 1
                 continue
@@ -223,10 +195,9 @@ class CIDABinDiff(diaphora.CBinDiff):
         ea2 = str(int(item[3], 16))
         self.do_import_one(ea1, ea2, True)
 
-        new_func = self.read_function(str(ea1))
+        new_func = self.read_function_with_timeout(str(ea1), timeout = 120)
         self.delete_function(ea1)
         self.save_function(new_func)
-
         self.db.commit()
 
     def import_instruction_level(self, ea1, ea2, cur):
@@ -393,8 +364,26 @@ class CIDABinDiff(diaphora.CBinDiff):
 
         return True
 
+    def read_function_with_timeout(self, f, timeout = 60):
+        # Register a function to raise a TimeoutError on the signal.
+        signal.signal(signal.SIGALRM, raise_timeout)
+        # Schedule the signal to be sent after ``time``.
+        signal.alarm(timeout)
+        ret = None
+
+        try:
+            ret = self.read_function(f)
+        except TimeoutError:
+            log.warning("Timeout while reading function at 0x%s", f)
+        except Exception:
+            log.exception("Exception while trying to read %s", f)
+        finally:
+            # Unregister the signal so it won't be triggered
+            # if the timeout is not reached.
+            signal.signal(signal.SIGALRM, signal.SIG_IGN)
+        return ret
+
     # Most important function
-    @timeout(300)
     def read_function(self, f, discard=False):
         log.debug(f"READ F {f}")
 
@@ -413,7 +402,7 @@ class CIDABinDiff(diaphora.CBinDiff):
                 return False
 
         except Exception:
-            log.exception(f"Could not read function name for address {f}")
+            log.error(f"Could not read function name for address {f}")
 
         # WTF
         f = int(f)
