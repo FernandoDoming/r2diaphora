@@ -437,7 +437,7 @@ class CBinDiff:
                                                 function_hash varchar(100),
                                                 bytes_sum integer,
                                                 md_index double,
-                                                constants text,
+                                                constants mediumtext,
                                                 constants_count integer,
                                                 segment_rva integer,
                                                 assembly_addrs text,
@@ -799,7 +799,13 @@ class CBinDiff:
                         if addr in self.pseudo_comments:
                             pseudocomment, pseudoitp = self.pseudo_comments[addr]
 
-                        cur_execute(sql, (str(addr), mnem, disasm, cmt1, cmt2, name, mtype, pseudocomment, pseudoitp))
+                        cur_execute(
+                            sql,
+                            (
+                                str(addr), mnem, disasm, cmt1[0:1023], cmt2[0:1023],
+                                name, mtype, pseudocomment, pseudoitp
+                            )
+                        )
                         db_id = cur.lastrowid
                     instructions_ids[addr] = db_id
 
