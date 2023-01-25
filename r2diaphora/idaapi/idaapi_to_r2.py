@@ -298,19 +298,18 @@ def no_ret_functions():
     return _no_ret_fns
 
 _all_fns = None
-def get_all_fns(exclude_libs = False):
+def get_all_fns(exclude_libs = False, function_filter = None):
     global _all_fns
-    if _all_fns:
-        if exclude_libs:
-            return [fn for fn in _all_fns if not fn["name"].startswith("flirt.")]
-        else:
-            return _all_fns
+    if not _all_fns:
+        _all_fns = log_exec_r2_cmdj("aflj")
 
-    _all_fns = log_exec_r2_cmdj("aflj")
+    fns = _all_fns
     if exclude_libs:
-        return [fn for fn in _all_fns if not fn["name"].startswith("flirt.")]
-    else:
-        return _all_fns
+        fns = [fn for fn in _all_fns if not fn["name"].startswith("flirt.")]
+    if function_filter:
+        fns = [fn for fn in fns if function_filter(fn)]
+
+    return fns
 
 def scan_libs():
     sigs_dir = os.path.join(os.path.expanduser("~"), ".r2diaphora", "signatures", "flirt")
