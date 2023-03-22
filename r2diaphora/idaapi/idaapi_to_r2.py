@@ -511,12 +511,12 @@ def GetInstructionList():
 
 #-----------------------------------------------------------------------
 def Heads(ea, size):
-    # res = log_exec_r2_cmd(f"pid {size} @ {ea}~[0]").strip()
-    # addrs = filter(None, [int16(x) for x in res.split("\n")])
-    # # Remove duplicates
-    # return list(dict.fromkeys(addrs))
-    ops = log_exec_r2_cmdj(f"aoj {size} @ {ea}")
-    return [op["addr"] for op in ops]
+    res = log_exec_r2_cmd(f"pid {size} @ {ea}~[0]").strip()
+    addrs = [int(x, 16) for x in res.split("\n") if x]
+    # Remove duplicates
+    return list(dict.fromkeys(addrs))
+    # ops = log_exec_r2_cmdj(f"aoj {size} @ {ea}")
+    # return [op["addr"] for op in ops]
 
 def GetCommentEx(x, type):
     return log_exec_r2_cmd("CC.@ %s"%(x))
@@ -526,15 +526,8 @@ def diaphora_decode(x):
     if x == 0:
         return 0, []
 
-    ins = log_exec_r2_cmdj(f"aoj 1 @ {x}")
-    if len(ins) == 0:
-        return 0, []
-
-    decoded_size = 0
-    for op in ins:
-        decoded_size += op["size"]
-
-    return decoded_size, ins
+    ins = log_exec_r2_cmdj(f"aoj 1 @ {x}")[0]
+    return ins["size"], ins
 
 #-----------------------------------------------------------------------
 def SegStart(ea):

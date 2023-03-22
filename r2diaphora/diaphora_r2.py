@@ -51,6 +51,8 @@ formatter = logging.Formatter(LOG_FORMAT)
 console.setFormatter(formatter)
 log.addHandler(console)
 
+cpu_ins_list = []
+
 if os.getenv("MODE") == "DEBUG":
     print("[*] Running in DEBUG mode")
     fh = RotatingFileHandler("diaphora_debug.log", maxBytes=1073741824, backupCount=5)      # 1GB
@@ -82,7 +84,8 @@ def raise_timeout(signum, frame):
 #-----------------------------------------------------------------------
 g_bindiff_opts = {
     "decompiler_command": "pdg",
-    "use_decompiler": True
+    "use_decompiler": True,
+    "rebuild_ast": False,
 }
 
 #-----------------------------------------------------------------------
@@ -108,22 +111,25 @@ class CIDABinDiff(diaphora.CBinDiff):
             self.unmatched_second.show(force)
 
     def do_export(self, function_filter = None, userdata = ""):
+        global cpu_ins_list
+
         callgraph_primes = 1
         callgraph_all_primes = {}
         func_list = Functions(function_filter)
         total_funcs = len(func_list)
         t = time.time()
 
+        cpu_ins_list = GetInstructionList()
+        cpu_ins_list.sort()
+
         self.db.commit()
         self.db.start_transaction()
 
-        log.debug("FUNC LISTING IS %s" % (func_list))
-        i = 0
-        for func in func_list:
-            log.debug("PROPS FOR FUNC cur %s" % (func))
+        log.debug("FUNC LISTING IS %s", func_list)
+        for i, func in enumerate(func_list, start = 1):
+            log.debug("PROPS FOR FUNC cur %s", func)
             props = self.read_function_with_timeout(func, timeout = 60)
             if not props:
-                i += 1
                 continue
 
             ret = props[11]
@@ -139,15 +145,15 @@ class CIDABinDiff(diaphora.CBinDiff):
             try:
                 self.save_function(props)
             except Exception:
-                log.exception(f"Failed to save function {func}")
-                i += 1
+                log.exception("Failed to save function %s", func)
                 continue
 
-            i += 1
-            line = "Exported %s fn (%d/%d). Elapsed %d s, remaining time ~%d s"
             elapsed = time.time() - t
             remaining = (elapsed / i) * (total_funcs - i)
-            log.info(line % (name, i, total_funcs, elapsed, remaining))
+            log.info(
+                "Exported %s fn (%d/%d). Elapsed %d s, remaining time ~%d s", 
+                name, i, total_funcs, elapsed, remaining
+            )
 
         # Try to fix bug #30 and, also, try to speed up operations as
         # doing a commit every 10 functions, as before, is overkill.
@@ -170,8 +176,8 @@ class CIDABinDiff(diaphora.CBinDiff):
         self.db_close()
 
     def reinit(self, main_db, diff_db, create_choosers=True):
-        log.debug("Main database '%s'." % main_db)
-        log.debug("Diff database '%s'." % diff_db)
+        log.debug("Main database %s", main_db)
+        log.debug("Diff database %s", diff_db)
 
         self.__init__(main_db)
         self.attach_database(diff_db)
@@ -298,13 +304,16 @@ class CIDABinDiff(diaphora.CBinDiff):
             # Failed to decompile
             return None
 
-        visitor = CAstVisitor()
-        visitor.apply_to(
-            f"""
-            {self.clean_pseudocode(sv)}
-            """
-        )
-        self.pseudo_hash[ea] = visitor.primes_hash
+        if self.rebuild_ast:
+            visitor = CAstVisitor()
+            visitor.apply_to(
+                f"""
+                {self.clean_pseudocode(sv)}
+                """
+            )
+            self.pseudo_hash[ea] = visitor.primes_hash
+        else:
+            self.pseudo_hash[ea] = 1
         self.pseudo[ea] = []
 
         first_line = None
@@ -385,15 +394,13 @@ class CIDABinDiff(diaphora.CBinDiff):
 
     # Most important function
     def read_function(self, f, discard=False):
-        log.debug(f"READ F {f}")
-
+        log_exec_r2_cmd(f"s {f}")
         name = ""
         true_name = ""
         try:
             name_info = log_exec_r2_cmdj(f"fd.j @ {f}")[0]
             name = name_info.get("name")
             true_name = name_info.get("realname")
-            log.debug(f"F NAME {name}")
             demangled_name = name #r2.cmdj(f"isj. @ {f}").get("name", "")
             #if demangled_name != "":
             #    name = demangled_name
@@ -424,7 +431,7 @@ class CIDABinDiff(diaphora.CBinDiff):
 
         nodes = 0
         edges = 0
-        instructions = 0
+        instructions = fninfo["ninstrs"]
         mnems = []
         dones = {}
         names = set()
@@ -454,30 +461,24 @@ class CIDABinDiff(diaphora.CBinDiff):
         ]
 
         mnemonics_spp = 1
-        cpu_ins_list = GetInstructionList()
-        cpu_ins_list.sort()
-
         image_base = self.get_base_address()
         flags = log_exec_r2_cmdj("fj")
         s = time.time()
         log.debug(f"Fn {name} - Starting block iteration")
         for block in flow:
             nodes += 1
-            block_startEA = +block["addr"];
-            block_endEA = +block["addr"] + +block["size"];
-            block.update({"startEA": block_startEA})
-            block.update({"endEA": block_endEA})
+            block.update({"start": block["addr"], "end": block["addr"] + block["size"] })
             instructions_data = []
 
-            block_ea = block_startEA - image_base
+            block_ea = block["start"] - image_base
             idx = len(bb_topological)
             bb_topological[idx] = []
             bb_topo_num[block_ea] = idx
 
-            for x in Heads(block["addr"], block["ninstr"]):
-                mnem = GetMnem(x)
-                disasm = GetDisasm(x)
-                instructions += 1
+            for x in block["instrs"]:
+                _, ins = diaphora_decode(x)
+                mnem   = ins["mnemonic"]
+                disasm = ins["disasm"]
 
                 if mnem in cpu_ins_list:
                     mnemonics_spp *= self.primes[cpu_ins_list.index(mnem)]
@@ -493,11 +494,6 @@ class CIDABinDiff(diaphora.CBinDiff):
                         except Exception:
                             assembly[block_ea] = ["loc_%s:" % x, disasm]
 
-                decoded_size, ins = diaphora_decode(x)
-                if len(ins) < 1:
-                    continue
-                ins = ins[0]
-
                 for oper in ins.get("opex", {}).get("operands", []):
                     if oper["type"] == "imm":
                         if self.is_constant(oper, x) and self.constant_filter(oper["value"]):
@@ -512,9 +508,9 @@ class CIDABinDiff(diaphora.CBinDiff):
                 function_hash.append(bytes.fromhex(ins["bytes"]))
                 outdegree += len(CodeRefsFrom(x, 0))
                 mnems.append(mnem)
-                op_value = GetOperandValue(x, 1)
+                op_value = self.get_operand_value(ins, 1)
                 if op_value == -1:
-                    op_value = GetOperandValue(x, 0)
+                    op_value = self.get_operand_value(ins, 0)
 
                 tmp_name = None
                 if op_value != BADADDR and op_value in self.names:
@@ -534,7 +530,9 @@ class CIDABinDiff(diaphora.CBinDiff):
 
                 ins_cmt1 = GetCommentEx(x, 0)
                 ins_cmt2 = GetCommentEx(x, 1)
-                instructions_data.append([x - image_base, mnem, disasm, ins_cmt1, ins_cmt2, tmp_name, tmp_type])
+                instructions_data.append(
+                    [x - image_base, mnem, disasm, ins_cmt1, ins_cmt2, tmp_name, tmp_type]
+                )
 
             basic_blocks_data[block_ea] = instructions_data
             bb_relations[block_ea] = []
@@ -542,8 +540,8 @@ class CIDABinDiff(diaphora.CBinDiff):
                 # bb in degree, out degree
                 bb_degree[block_ea] = [0, 0]
 
-            succs = block_succs(block_startEA)
-            preds = block_preds(block_startEA)
+            succs = block_succs(block["start"])
+            preds = block_preds(block["start"])
             for succ_block in succs:
                 succ_base = succ_block - image_base #.startEA - image_base
                 bb_relations[block_ea].append(succ_base)
@@ -560,9 +558,9 @@ class CIDABinDiff(diaphora.CBinDiff):
 
             for pred_block in preds:
                 try:
-                    bb_relations[pred_block - image_base].append(block["startEA"] - image_base)
+                    bb_relations[pred_block - image_base].append(block["start"] - image_base)
                 except KeyError:
-                    bb_relations[pred_block - image_base] = [block["startEA"] - image_base]
+                    bb_relations[pred_block - image_base] = [block["start"] - image_base]
 
                 edges += 1
                 outdegree += 1
@@ -649,7 +647,7 @@ class CIDABinDiff(diaphora.CBinDiff):
         try:
             prime = str(self.primes[cc])
         except Exception:
-            log.error("Cyclomatic complexity too big: 0x%x -> %d" % (f, cc))
+            log.error("Cyclomatic complexity too big: 0x%x -> %d", f, cc)
             prime = 0
 
         comment = GetFunctionCmt(f, 1)
@@ -679,7 +677,7 @@ class CIDABinDiff(diaphora.CBinDiff):
             clean_assembly = self.get_cmp_asm_lines(asm)
         except Exception:
             clean_assembly = ""
-            log.error("Error getting assembly for 0x%x" % f)
+            log.error("Error getting assembly for 0x%x", f)
 
         clean_pseudo = self.get_cmp_pseudo_lines(pseudo)
 
@@ -720,6 +718,24 @@ class CIDABinDiff(diaphora.CBinDiff):
                          assembly_addrs, kgh_hash, None,
                          callers, callees,
                          basic_blocks_data, bb_relations)
+    
+    def get_ins(self, x):
+        return log_exec_r2_cmdj(f"aoj 1 @ {x}")[0]
+
+    def get_operand_value(self, ins, n):
+        try:
+            op = ins["opex"]["operands"][n]
+        except (KeyError, IndexError):
+            return -1
+
+        if op["type"] == "imm":
+            return op["value"]
+        elif op["type"] == "reg":
+            return -1
+        elif op["type"] == "mem":
+            return op["disp"]
+        else:
+            return -1
 
     def create_function_dictionary(self, l):
         (name, nodes, edges, indegree, outdegree, size, instructions, mnems, names,
@@ -890,6 +906,7 @@ def _diff_or_export(function_filter = None, dbname = None, userdata = "", **opti
         bd = CIDABinDiff(opts.file_out)
         bd.use_decompiler_always = (get_arch() != "sh") and g_bindiff_opts.get("use_decompiler", True)
         bd.decompiler_command = g_bindiff_opts.get("decompiler_command", "pdg")
+        bd.rebuild_ast = g_bindiff_opts.get("rebuild_ast", False)
         bd.exclude_library_thunk = opts.exclude_library_thunk
         bd.unreliable = opts.unreliable
         bd.slow_heuristics = opts.slow
@@ -1052,6 +1069,12 @@ def main():
         help="Analyze ALL functions (by default library functions are skipped)"
     )
 
+    parser.add_argument(
+        "--ast",
+        action='store_true',
+        help="Attempt to rebuild AST from the decompiler output for additional function traits"
+    )
+
     args = parser.parse_args()
     args.file1 = args.file1[0]
     decompiler_commands = {
@@ -1061,6 +1084,7 @@ def main():
 
     g_bindiff_opts["decompiler_command"] = decompiler_commands.get(args.decompiler)
     g_bindiff_opts["use_decompiler"] = not args.no_decompiler
+    g_bindiff_opts["rebuild_ast"] = args.ast
 
     db1name = dbname_for_file(args.file1)
     bd = diaphora.CBinDiff(db1name)

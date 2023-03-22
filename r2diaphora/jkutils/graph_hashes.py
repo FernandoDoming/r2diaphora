@@ -104,9 +104,7 @@ class CKoretKaramitasHash:
 
   def is_call_insn(self, ea):
     _, inss = diaphora_decode(ea)
-    if len(inss) < 1:
-      return False
-    return "call" in inss[0].get("type")
+    return "call" in inss.get("type")
 
   def calculate(self, f):
     fname = get_function_name(f).get("name")
@@ -139,7 +137,7 @@ class CKoretKaramitasHash:
       hash *= self.get_edges_value(block, succs, preds)
 
       # ...and each instruction on each basic block
-      for ea in Heads(block["start_ea"], block["ninstr"]):
+      for ea in block["instrs"]:
 
         if self.is_call_insn(ea):
           hash *= FEATURE_CALL
