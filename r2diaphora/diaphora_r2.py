@@ -37,7 +37,7 @@ import r2diaphora
 from r2diaphora import diaphora
 from r2diaphora.others.tarjan_sort import strongly_connected_components, robust_topological_sort
 from r2diaphora.jkutils.factor import primesbelow as primes
-from r2diaphora.jkutils.graph_hashes import CKoretKaramitasHash
+from r2diaphora.jkutils.graph_hashes import *
 
 from r2diaphora.idaapi.idaapi_to_r2 import *
 
@@ -61,23 +61,6 @@ if os.getenv("MODE") == "DEBUG":
     fh.setFormatter(formatter)
     log.addHandler(fh)
 
-# Messages
-MSG_RELAXED_RATIO_ENABLED = """AUTOHIDE DATABASE\n<b>Relaxed ratio calculations</b> will be enabled. It will ignore many small
-modifications to functions and will match more functions with higher ratios. Enable this option if you're only interested in the
-new functionality. Disable it for patch diffing if you're interested in small modifications (like buffer sizes).
-<br><br>
-This is automatically done for diffing big databases (more than 20,000 functions in the database).<br><br>
-You can disable it by un-checking the 'Relaxed calculations of differences ratios' option."""
-
-MSG_FUNCTION_SUMMARIES_ONLY = """AUTOHIDE DATABASE\n<b>Do not export basic blocks or instructions</b> will be enabled.<br>
-It will not export the information relative to basic blocks or<br>
-instructions and 'Diff assembly in a graph' will not be available.
-<br><br>
-This is automatically done for exporting huge databases with<br>
-more than 100,000 functions.<br><br>
-You can disable it by un-checking the 'Do not export basic blocks<br>
-or instructions' option."""
-
 def raise_timeout(signum, frame):
     raise TimeoutError
 
@@ -95,20 +78,6 @@ class CIDABinDiff(diaphora.CBinDiff):
         self.names = Names()
         self.min_ea = MinEA()
         self.max_ea = MaxEA()
-
-    def show_choosers(self, force=False):
-        if len(self.best_chooser.items) > 0:
-            self.best_chooser.show(force)
-
-        if len(self.partial_chooser.items) > 0:
-            self.partial_chooser.show(force)
-
-        if self.unreliable_chooser is not None and len(self.unreliable_chooser.items) > 0:
-            self.unreliable_chooser.show(force)
-        if self.unmatched_primary is not None and len(self.unmatched_primary.items) > 0:
-            self.unmatched_primary.show(force)
-        if self.unmatched_second is not None and len(self.unmatched_second.items) > 0:
-            self.unmatched_second.show(force)
 
     def do_export(self, function_filter = None, userdata = ""):
         global cpu_ins_list
@@ -449,7 +418,7 @@ class CIDABinDiff(diaphora.CBinDiff):
         bb_degree = {}
         bb_edges = []
         assembly_addrs = [] # TODO: Fill info
-        kgh_hash = ""
+        kgh_hash = 1
         callers = [c.get("from") for c in log_exec_r2_cmdj(f"axtj @ {f}")]
         fn_refs = log_exec_r2_cmdj(f"axffj @ {f}")
         callees = [c.get("at") for c in fn_refs if c.get("type") == "CALL"]
@@ -479,6 +448,9 @@ class CIDABinDiff(diaphora.CBinDiff):
                 _, ins = diaphora_decode(x)
                 mnem   = ins["mnemonic"]
                 disasm = ins["disasm"]
+
+                if "call" in ins.get("type"):
+                    kgh_hash *= FEATURE_CALL
 
                 if mnem in cpu_ins_list:
                     mnemonics_spp *= self.primes[cpu_ins_list.index(mnem)]
@@ -518,12 +490,18 @@ class CIDABinDiff(diaphora.CBinDiff):
                     if not tmp_name.startswith("fcn."):
                         names.add(tmp_name)
 
-                l = list(CodeRefsFrom(x, 0))
-                if len(l) == 0:
-                    l = DataRefsFrom(x)
+                drefs = DataRefsFrom(x)
+                refs = coderefs = list(CodeRefsFrom(x, 0))
+                if len(coderefs) == 0:
+                    refs = drefs
+                if len(drefs) > 0:
+                    kgh_hash *= FEATURE_DATA_REFS
+                for xref in coderefs:
+                    if not is_func(xref) or get_flag_at_addr(xref).get("name") != name:
+                        kgh_hash *= FEATURE_CALL_REF
 
                 tmp_type = None
-                for ref in l:
+                for ref in refs:
                     if ref in self.names:
                         tmp_name = self.names[ref]
                         tmp_type = GetType(ref)
@@ -533,6 +511,7 @@ class CIDABinDiff(diaphora.CBinDiff):
                 instructions_data.append(
                     [x - image_base, mnem, disasm, ins_cmt1, ins_cmt2, tmp_name, tmp_type]
                 )
+            # End for x in block["instr"]
 
             basic_blocks_data[block_ea] = instructions_data
             bb_relations[block_ea] = []
@@ -542,6 +521,11 @@ class CIDABinDiff(diaphora.CBinDiff):
 
             succs = block_succs(block["start"])
             preds = block_preds(block["start"])
+
+            kgh = CKoretKaramitasHash(get_r2())
+            kgh_hash *= kgh.get_node_value(len(succs), len(preds))
+            kgh_hash *= kgh.get_edges_value(block, succs, preds)
+
             for succ_block in succs:
                 succ_base = succ_block - image_base #.startEA - image_base
                 bb_relations[block_ea].append(succ_base)
@@ -602,9 +586,10 @@ class CIDABinDiff(diaphora.CBinDiff):
             bb_topological = json.dumps(bb_topological_sorted)
             strongly_connected_spp = 1
             for item in strongly_connected:
-                val = len(item)
-                if val > 1:
-                    strongly_connected_spp *= self.primes[val]
+                sc_len = len(item)
+                if sc_len > 1:
+                    strongly_connected_spp *= self.primes[sc_len]
+
         except Exception:
             # XXX: FIXME: The original implementation that we're using is
             # recursive and can fail. We really need to create our own non
@@ -616,10 +601,14 @@ class CIDABinDiff(diaphora.CBinDiff):
         for sc in strongly_connected:
             if len(sc) > 1:
                 loops += 1
+                kgh_hash *= FEATURE_LOOP
             else:
                 if sc[0] in bb_relations and sc[0] in bb_relations[sc[0]]:
                     loops += 1
+                    kgh_hash *= FEATURE_LOOP
 
+        kgh_hash *= (FEATURE_STRONGLY_CONNECTED ** len(strongly_connected))
+        
         asm = []
         keys = list(assembly.keys())
         keys.sort()
@@ -704,10 +693,11 @@ class CIDABinDiff(diaphora.CBinDiff):
         x = f
         seg_rva = x - SegStart(x)
         rva = f - self.get_base_address()
-        log.debug(f"Fn {name} - Decompiler: {time.time() - s}s")
 
-        kgh = CKoretKaramitasHash(get_r2())
-        kgh_hash = kgh.calculate(f)
+        if name in no_ret_functions():
+            kgh_hash *= FEATURE_FUNC_NO_RET
+        if name.startswith("flirt."):
+            kgh_hash *= FEATURE_FUNC_LIB
 
         return (name, nodes, edges, indegree, outdegree, size, instructions, mnems, names,
                          proto, cc, prime, f, comment, true_name, bytes_hash, pseudo, pseudo_lines,
@@ -715,12 +705,9 @@ class CIDABinDiff(diaphora.CBinDiff):
                          pseudo_hash2, pseudo_hash3, len(strongly_connected), loops, rva, bb_topological,
                          strongly_connected_spp, clean_assembly, clean_pseudo, mnemonics_spp, switches,
                          function_hash, bytes_sum, md_index, constants, len(constants), seg_rva,
-                         assembly_addrs, kgh_hash, None,
+                         assembly_addrs, str(kgh_hash), None,
                          callers, callees,
                          basic_blocks_data, bb_relations)
-    
-    def get_ins(self, x):
-        return log_exec_r2_cmdj(f"aoj 1 @ {x}")[0]
 
     def get_operand_value(self, ins, n):
         try:
@@ -941,8 +928,6 @@ class BinDiffOptions:
         # Enable, by default, relaxed calculations on difference ratios for
         # 'big' databases (>20k functions)
         self.relax = kwargs.get('relax', total_functions > 20000)
-        if self.relax:
-            log.debug(MSG_RELAXED_RATIO_ENABLED)
         self.unreliable = kwargs.get('unreliable', False)
         self.slow = kwargs.get('slow', False)
         self.experimental = kwargs.get('experimental', False)
