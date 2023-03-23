@@ -32,6 +32,7 @@ import difflib
 import logging
 from logging.handlers import RotatingFileHandler
 from hashlib import md5, sha256
+from multiprocessing import Pool
 
 import r2diaphora
 from r2diaphora import diaphora
@@ -43,7 +44,7 @@ from r2diaphora.idaapi.idaapi_to_r2 import *
 
 LOG_FORMAT = "%(asctime)-15s [%(levelname)s] - %(message)s"
 log = logging.getLogger("diaphora.r2")
-log.setLevel(logging.DEBUG)
+log.setLevel(logging.INFO)
 
 console = logging.StreamHandler()
 console.setLevel(logging.INFO)
@@ -51,7 +52,19 @@ formatter = logging.Formatter(LOG_FORMAT)
 console.setFormatter(formatter)
 log.addHandler(console)
 
+#-----------------------------------------------------------------------
+# GLOBALS
+#-----------------------------------------------------------------------
+g_bindiff_opts = {
+    "decompiler_command": "pdg",
+    "use_decompiler": True,
+    "rebuild_ast": False,
+}
+
 cpu_ins_list = []
+g_filepath = None
+bd = None
+#-----------------------------------------------------------------------
 
 if os.getenv("MODE") == "DEBUG":
     print("[*] Running in DEBUG mode")
@@ -61,32 +74,29 @@ if os.getenv("MODE") == "DEBUG":
     fh.setFormatter(formatter)
     log.addHandler(fh)
 
-# Messages
-MSG_RELAXED_RATIO_ENABLED = """AUTOHIDE DATABASE\n<b>Relaxed ratio calculations</b> will be enabled. It will ignore many small
-modifications to functions and will match more functions with higher ratios. Enable this option if you're only interested in the
-new functionality. Disable it for patch diffing if you're interested in small modifications (like buffer sizes).
-<br><br>
-This is automatically done for diffing big databases (more than 20,000 functions in the database).<br><br>
-You can disable it by un-checking the 'Relaxed calculations of differences ratios' option."""
-
-MSG_FUNCTION_SUMMARIES_ONLY = """AUTOHIDE DATABASE\n<b>Do not export basic blocks or instructions</b> will be enabled.<br>
-It will not export the information relative to basic blocks or<br>
-instructions and 'Diff assembly in a graph' will not be available.
-<br><br>
-This is automatically done for exporting huge databases with<br>
-more than 100,000 functions.<br><br>
-You can disable it by un-checking the 'Do not export basic blocks<br>
-or instructions' option."""
-
 def raise_timeout(signum, frame):
     raise TimeoutError
 
-#-----------------------------------------------------------------------
-g_bindiff_opts = {
-    "decompiler_command": "pdg",
-    "use_decompiler": True,
-    "rebuild_ast": False,
-}
+def init_worker(input_path):
+    global r2
+    if not r2:
+        r2_open(input_path)
+    bd.open_db()
+
+def read_save_function(func, userdata):
+    props = bd.read_function_with_timeout(func, timeout = 60)
+    if not props:
+        return None
+
+    props = list(props)
+    props[42] = userdata
+    try:
+        bd.save_function(props)
+    except Exception:
+        log.exception("Failed to save function %s", func)
+        return None
+    print(f"Exported funcion {func}")
+    return props
 
 #-----------------------------------------------------------------------
 class CIDABinDiff(diaphora.CBinDiff):
@@ -96,25 +106,9 @@ class CIDABinDiff(diaphora.CBinDiff):
         self.min_ea = MinEA()
         self.max_ea = MaxEA()
 
-    def show_choosers(self, force=False):
-        if len(self.best_chooser.items) > 0:
-            self.best_chooser.show(force)
-
-        if len(self.partial_chooser.items) > 0:
-            self.partial_chooser.show(force)
-
-        if self.unreliable_chooser is not None and len(self.unreliable_chooser.items) > 0:
-            self.unreliable_chooser.show(force)
-        if self.unmatched_primary is not None and len(self.unmatched_primary.items) > 0:
-            self.unmatched_primary.show(force)
-        if self.unmatched_second is not None and len(self.unmatched_second.items) > 0:
-            self.unmatched_second.show(force)
-
     def do_export(self, function_filter = None, userdata = ""):
         global cpu_ins_list
 
-        callgraph_primes = 1
-        callgraph_all_primes = {}
         func_list = Functions(function_filter)
         total_funcs = len(func_list)
         t = time.time()
@@ -122,44 +116,34 @@ class CIDABinDiff(diaphora.CBinDiff):
         cpu_ins_list = GetInstructionList()
         cpu_ins_list.sort()
 
+        callgraph_primes = 1
+        callgraph_all_primes = {}
+
         self.db.commit()
         self.db.start_transaction()
 
-        log.debug("FUNC LISTING IS %s", func_list)
-        for i, func in enumerate(func_list, start = 1):
-            log.debug("PROPS FOR FUNC cur %s", func)
-            props = self.read_function_with_timeout(func, timeout = 60)
-            if not props:
-                continue
-
-            ret = props[11]
-            name = props[0]
-            callgraph_primes *= decimal.Decimal(ret)
-            try:
-                callgraph_all_primes[ret] += 1
-            except KeyError:
-                callgraph_all_primes[ret] = 1
-
-            props = list(props)
-            props[42] = userdata
-            try:
-                self.save_function(props)
-            except Exception:
-                log.exception("Failed to save function %s", func)
-                continue
-
-            elapsed = time.time() - t
-            remaining = (elapsed / i) * (total_funcs - i)
-            log.info(
-                "Exported %s fn (%d/%d). Elapsed %d s, remaining time ~%d s", 
-                name, i, total_funcs, elapsed, remaining
+        log.debug("Function list to export is %s", func_list)
+        with Pool(initializer=init_worker, initargs=(g_filepath,)) as pool:
+            results = pool.starmap(
+                read_save_function,
+                [(f, userdata) for f in func_list]
             )
+            for props in results:
+                if not props:
+                    continue
+
+                ret = props[11]
+                callgraph_primes *= decimal.Decimal(ret)
+                try:
+                    callgraph_all_primes[ret] += 1
+                except KeyError:
+                    callgraph_all_primes[ret] = 1
 
         # Try to fix bug #30 and, also, try to speed up operations as
         # doing a commit every 10 functions, as before, is overkill.
-        if total_funcs > 1000 and i % (total_funcs/1000) == 0:
-            self.db.commit()
-            self.db.start_transaction()
+        #if total_funcs > 1000 and i % (total_funcs/1000) == 0:
+        self.db.commit()
+        self.db.start_transaction()
 
         md5sum = GetInputFileMD5()
         self.save_callgraph(str(callgraph_primes), json.dumps(callgraph_all_primes), md5sum)
@@ -170,7 +154,7 @@ class CIDABinDiff(diaphora.CBinDiff):
         try:
             self.do_export(function_filter, userdata)
         except Exception:
-            log.exception("")
+            log.exception("Unable to export database")
 
         self.db.commit()
         self.db_close()
@@ -894,13 +878,13 @@ class CIDABinDiff(diaphora.CBinDiff):
 #-----------------------------------------------------------------------
 def _diff_or_export(function_filter = None, dbname = None, userdata = "", **options):
     global g_bindiff_opts
+    global bd
 
     total_functions = len(list(Functions(function_filter)))
     options["function_filter"] = function_filter
     opts = BinDiffOptions(**options)
     if dbname:
         opts.file_out = dbname
-    bd = None
 
     try:
         bd = CIDABinDiff(opts.file_out)
@@ -910,7 +894,7 @@ def _diff_or_export(function_filter = None, dbname = None, userdata = "", **opti
         bd.exclude_library_thunk = opts.exclude_library_thunk
         bd.unreliable = opts.unreliable
         bd.slow_heuristics = opts.slow
-        bd.relaxed_ratio = opts.relax
+        bd.relaxed_ratio = 1.0
         bd.experimental = opts.experimental
         bd.min_ea = opts.min_ea
         bd.max_ea = opts.max_ea
@@ -940,9 +924,6 @@ class BinDiffOptions:
         self.exclude_library_thunk = kwargs.get('exclude_library_thunk', True)
         # Enable, by default, relaxed calculations on difference ratios for
         # 'big' databases (>20k functions)
-        self.relax = kwargs.get('relax', total_functions > 20000)
-        if self.relax:
-            log.debug(MSG_RELAXED_RATIO_ENABLED)
         self.unreliable = kwargs.get('unreliable', False)
         self.slow = kwargs.get('slow', False)
         self.experimental = kwargs.get('experimental', False)
@@ -979,9 +960,11 @@ def _gen_diaphora_db(
         function_filter = None,
         userdata = ""
     ):
+    global g_filepath
     global r2
+    g_filepath = input_path
     if not r2:
-        r2_open(input_path)
+        r2_open(g_filepath)
 
     scan_libs()
     _diff_or_export(function_filter, dbname=out_db, userdata=userdata)
