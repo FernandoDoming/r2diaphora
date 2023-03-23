@@ -656,7 +656,7 @@ def r2_open(input_path, ident_libs = False):
     r2.cmd("e scr.color=false")
     r2.cmd("e io.cache=true")
     #r2.cmd("aeim")
-    r2.cmd("e anal.hasnext=true")
+    #r2.cmd("e anal.hasnext=true")
 
     dll_extensions = {
         "Darwin": "dylib",

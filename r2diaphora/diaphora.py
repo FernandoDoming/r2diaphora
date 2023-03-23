@@ -700,7 +700,7 @@ class CBinDiff:
 
     def save_function(self, props):
         if props == False:
-            log.warning("WARNING: Trying to save a non resolved function?")
+            log.warning("Trying to save a non resolved function?")
             return
 
         # Phase 1: Fix data types and insert the function row.
