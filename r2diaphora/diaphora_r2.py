@@ -41,26 +41,6 @@ from r2diaphora.jkutils.graph_hashes import *
 
 from r2diaphora.idaapi.idaapi_to_r2 import *
 
-LOG_FORMAT = "%(asctime)-15s [%(levelname)s] - %(message)s"
-log = logging.getLogger("diaphora.r2")
-log.setLevel(logging.DEBUG)
-
-console = logging.StreamHandler()
-console.setLevel(logging.INFO)
-formatter = logging.Formatter(LOG_FORMAT)
-console.setFormatter(formatter)
-log.addHandler(console)
-
-cpu_ins_list = []
-
-if os.getenv("MODE") == "DEBUG":
-    print("[*] Running in DEBUG mode")
-    fh = RotatingFileHandler("diaphora_debug.log", maxBytes=1073741824, backupCount=5)      # 1GB
-    fh.setLevel(logging.DEBUG)
-    formatter = logging.Formatter(LOG_FORMAT)
-    fh.setFormatter(formatter)
-    log.addHandler(fh)
-
 def raise_timeout(signum, frame):
     raise TimeoutError
 
@@ -364,8 +344,8 @@ class CIDABinDiff(diaphora.CBinDiff):
     # Most important function
     def read_function(self, f, discard=False):
         log_exec_r2_cmd(f"s {f}")
-        name = ""
-        true_name = ""
+        kgh = CKoretKaramitasHash(get_r2())
+        name, true_name = "", ""
         try:
             name_info = log_exec_r2_cmdj(f"fd.j @ {f}")[0]
             name = name_info.get("name")
@@ -431,7 +411,6 @@ class CIDABinDiff(diaphora.CBinDiff):
 
         mnemonics_spp = 1
         image_base = self.get_base_address()
-        flags = log_exec_r2_cmdj("fj")
         s = time.time()
         log.debug(f"Fn {name} - Starting block iteration")
         for block in flow:
@@ -471,7 +450,10 @@ class CIDABinDiff(diaphora.CBinDiff):
                         if self.is_constant(oper, x) and self.constant_filter(oper["value"]):
                             constants.append(oper["value"])
 
-                mnem_bytes = ins["bytes"][0:ins["mask"].rfind("f") + 1]
+                mnem_bytes = ""
+                for i, mask_char in enumerate(ins["mask"]):
+                    if mask_char == "f":
+                        mnem_bytes += ins["bytes"][i]
                 curr_bytes = bytes.fromhex(mnem_bytes)
 
                 bytes_hash.append(curr_bytes)
@@ -522,7 +504,6 @@ class CIDABinDiff(diaphora.CBinDiff):
             succs = block_succs(block["start"])
             preds = block_preds(block["start"])
 
-            kgh = CKoretKaramitasHash(get_r2())
             kgh_hash *= kgh.get_node_value(len(succs), len(preds))
             kgh_hash *= kgh.get_edges_value(block, succs, preds)
 
@@ -555,17 +536,7 @@ class CIDABinDiff(diaphora.CBinDiff):
 
         log.debug(f"Fn {name} - Block iteration: {time.time() - s}s")
 
-        sws = [f for f in flags if f["name"].startswith("switch.")]
-        for sw in sws:
-            # Flags have an offset value, but this value is not the same for 
-            # switch flags and their cases
-            sw_ref = sw["name"].split(".")[1].lstrip("0x").lstrip("0")
-            if not test_addr_within_function(f, sw["offset"]):
-                continue
-
-            cases = [f for f in flags if f["name"].startswith(f"case.0x{sw_ref}.")]
-            cases_values = [case["name"].split(".")[-1] for case in cases]
-            switches.append([len(cases), cases_values])
+        switches = self.get_switches_info_for_fn(f)
 
         for block in flow:
             block_ea = block["addr"] - image_base
@@ -581,19 +552,10 @@ class CIDABinDiff(diaphora.CBinDiff):
         s = time.time()
         strongly_connected_spp = 0
         try:
-            strongly_connected = strongly_connected_components(bb_relations)
+            strongly_connected, strongly_connected_spp = self.calc_strongly_connected(bb_relations)
             bb_topological_sorted = robust_topological_sort(bb_topological)
             bb_topological = json.dumps(bb_topological_sorted)
-            strongly_connected_spp = 1
-            for item in strongly_connected:
-                sc_len = len(item)
-                if sc_len > 1:
-                    strongly_connected_spp *= self.primes[sc_len]
-
         except Exception:
-            # XXX: FIXME: The original implementation that we're using is
-            # recursive and can fail. We really need to create our own non
-            # recursive version.
             strongly_connected = []
             bb_topological = None
 
@@ -608,27 +570,9 @@ class CIDABinDiff(diaphora.CBinDiff):
                     kgh_hash *= FEATURE_LOOP
 
         kgh_hash *= (FEATURE_STRONGLY_CONNECTED ** len(strongly_connected))
-        
-        asm = []
-        keys = list(assembly.keys())
-        keys.sort()
-
-        # After sorting our the addresses of basic blocks, be sure that the
-        # very first address is always the entry point, no matter at what
-        # address it is.
-        try:
-            keys.remove(f - image_base)
-        except Exception:
-            pass
-        keys.insert(0, f - image_base)
-        for key in keys:
-            try:
-                asm.extend(assembly[key])
-            except Exception:
-                log.exception("")
-                pass
-        asm = "\n".join(asm)
         log.debug(f"Fn {name} - Topological analysis: {time.time() - s}s")
+
+        asm = self.build_asm_corpus(assembly, f, image_base)
 
         cc = edges - nodes + 2
         proto = self.guess_type(f)
@@ -644,10 +588,7 @@ class CIDABinDiff(diaphora.CBinDiff):
         function_hash = md5(b"".join(function_hash)).hexdigest()
 
         function_flags = GetFunctionFlags(f)
-        pseudo = None
-        pseudo_hash1 = None
-        pseudo_hash2 = None
-        pseudo_hash3 = None
+        pseudo, pseudo_hash1, pseudo_hash2, pseudo_hash3 = None, None, None, None
         pseudo_lines = 0
         pseudocode_primes = None
         if f in self.pseudo:
@@ -690,8 +631,7 @@ class CIDABinDiff(diaphora.CBinDiff):
             md_index = sum((1 / emb_t.sqrt() for emb_t in emb_tuples))
             md_index = str(md_index)
 
-        x = f
-        seg_rva = x - SegStart(x)
+        seg_rva = f - SegStart(f)
         rva = f - self.get_base_address()
 
         if name in no_ret_functions():
@@ -708,6 +648,52 @@ class CIDABinDiff(diaphora.CBinDiff):
                          assembly_addrs, str(kgh_hash), None,
                          callers, callees,
                          basic_blocks_data, bb_relations)
+
+    def build_asm_corpus(self, assembly, f, image_base):
+        asm = []
+        keys = list(assembly.keys())
+        keys.sort()
+
+        # After sorting our the addresses of basic blocks, be sure that the
+        # very first address is always the entry point, no matter at what
+        # address it is.
+        try:
+            keys.remove(f - image_base)
+        except Exception:
+            pass
+        keys.insert(0, f - image_base)
+        for key in keys:
+            try:
+                asm.extend(assembly[key])
+            except Exception:
+                log.exception("Failed to build assembly corpus for function %s", f)
+
+        return "\n".join(asm)
+
+    def get_switches_info_for_fn(self, function_ea):
+        switches = []
+        flags = log_exec_r2_cmdj("fj")
+        sws = [f for f in flags if f["name"].startswith("switch.")]
+        for sw in sws:
+            # Flags have an offset value, but this value is not the same for 
+            # switch flags and their cases
+            sw_ref = sw["name"].split(".")[1].lstrip("0x").lstrip("0")
+            if not test_addr_within_function(function_ea, sw["offset"]):
+                continue
+
+            cases = [f for f in flags if f["name"].startswith(f"case.0x{sw_ref}.")]
+            cases_values = [case["name"].split(".")[-1] for case in cases]
+            switches.append([len(cases), cases_values])
+        return switches
+
+    def calc_strongly_connected(self, bb_relations):
+        strongly_connected = strongly_connected_components(bb_relations)
+        strongly_connected_spp = 1
+        for item in strongly_connected:
+            sc_len = len(item)
+            if sc_len > 1:
+                strongly_connected_spp *= self.primes[sc_len]
+        return strongly_connected, strongly_connected_spp
 
     def get_operand_value(self, ins, n):
         try:
@@ -998,6 +984,24 @@ def compare_dbs(db1name, db2name):
 
 def main():
     import argparse
+
+    LOG_FORMAT = "%(asctime)-15s [%(levelname)s] - %(message)s"
+    log = logging.getLogger("diaphora.r2")
+    log.setLevel(logging.INFO)
+
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    formatter = logging.Formatter(LOG_FORMAT)
+    console.setFormatter(formatter)
+    log.addHandler(console)
+
+    if os.getenv("MODE") == "DEBUG":
+        print("[*] Running in DEBUG mode")
+        fh = RotatingFileHandler("diaphora_debug.log", maxBytes=1073741824, backupCount=5)      # 1GB
+        fh.setLevel(logging.DEBUG)
+        formatter = logging.Formatter(LOG_FORMAT)
+        fh.setFormatter(formatter)
+        log.addHandler(fh)
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
