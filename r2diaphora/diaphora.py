@@ -710,16 +710,24 @@ class CBinDiff:
         sql = f"""use `{self.db_name}`"""
         cur.execute(sql)
 
+        # Some numbers are very long
+        sys.set_int_max_str_digits(8000)
         # The last 4 fields are callers, callees, basic_blocks_data & bb_relations
         for prop in props[:len(props)-4]:
             # XXX: Fixme! This is a hack for 64 bit architectures kernels
             if type(prop) is int and (prop > 0xFFFFFFFF or prop < -0xFFFFFFFF):
-                prop = str(prop)
+                try:
+                    prop = str(prop)
+                except ValueError:
+                    log.warning("Could not convert prop %s to string", prop)
+                    prop = ""
+
             elif type(prop) is bytes:
                 prop = prop.encode("utf-8")
 
             if type(prop) is list or type(prop) is set:
                 new_props.append(json.dumps(list(prop), ensure_ascii=False, cls=bytes_encoder))
+
             else:
                 new_props.append(prop)
 
@@ -1920,10 +1928,10 @@ class CBinDiff:
                                 id integer,
                                 id1 integer,
                                 ea1 varchar(255),
-                                name1 varchar(255),
+                                name1 varchar(1024),
                                 id2 integer,
                                 ea2 varchar(255),
-                                name2 varchar(255)
+                                name2 varchar(1024)
                             )
             """)
 
