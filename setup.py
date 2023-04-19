@@ -35,7 +35,7 @@ class CustomInstall(install):
 
 setup(
     name="r2diaphora",
-    version="0.2.1",
+    version="0.2.2",
     description="radare2 port of diaphora",
     url="https://github.com/FernandoDoming/r2diaphora",
     author="Fernando Domínguez",

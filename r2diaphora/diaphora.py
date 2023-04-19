@@ -711,7 +711,8 @@ class CBinDiff:
         cur.execute(sql)
 
         # Some numbers are very long
-        sys.set_int_max_str_digits(8000)
+        if hasattr(sys, "set_int_max_str_digits"):
+            sys.set_int_max_str_digits(8000)
         # The last 4 fields are callers, callees, basic_blocks_data & bb_relations
         for prop in props[:len(props)-4]:
             # XXX: Fixme! This is a hack for 64 bit architectures kernels
