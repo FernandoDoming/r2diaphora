@@ -25,6 +25,7 @@ import os
 import re
 import sys
 import time
+import math
 import json
 import signal
 import decimal
@@ -50,6 +51,9 @@ g_bindiff_opts = {
     "use_decompiler": True,
     "rebuild_ast": False,
 }
+
+def round_up_to_even(f):
+    return math.ceil(f / 2.) * 2
 
 #-----------------------------------------------------------------------
 class CIDABinDiff(diaphora.CBinDiff):
@@ -450,10 +454,7 @@ class CIDABinDiff(diaphora.CBinDiff):
                         if self.is_constant(oper, x) and self.constant_filter(oper["value"]):
                             constants.append(oper["value"])
 
-                mnem_bytes = ""
-                for i, mask_char in enumerate(ins["mask"]):
-                    if mask_char == "f":
-                        mnem_bytes += ins["bytes"][i]
+                mnem_bytes = ins["bytes"][ins["mask"].find("f"):ins["mask"].rfind("f") + 1]
                 curr_bytes = bytes.fromhex(mnem_bytes)
 
                 bytes_hash.append(curr_bytes)
