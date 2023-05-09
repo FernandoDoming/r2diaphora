@@ -646,6 +646,7 @@ def Names():
 def r2_open(input_path, ident_libs = False):
     global r2
     r2 = r2pipe.open(f"ccall://{input_path}", flags=["-2", "-q"])
+    r2.cmd("e log.level=0")
     r2.use_cache = True
     r2.cmd("aaaa")
     #r2.cmd("aac")

@@ -338,7 +338,10 @@ class CIDABinDiff(diaphora.CBinDiff):
         except TimeoutError:
             log.warning("Timeout while reading function at 0x%s", f)
         except Exception:
-            log.exception("Exception while trying to read %s", f)
+            log.exception(
+                "Exception while trying to read function at 0x%x in sample %s",
+                f, log_exec_r2_cmdj("ij").get("core", {}).get("file", "PATH ERROR")
+            )
         finally:
             # Unregister the signal so it won't be triggered
             # if the timeout is not reached.
@@ -665,7 +668,8 @@ class CIDABinDiff(diaphora.CBinDiff):
         keys.insert(0, f - image_base)
         for key in keys:
             try:
-                asm.extend(assembly[key])
+                if key in assembly:
+                    asm.extend(assembly[key])
             except Exception:
                 log.exception("Failed to build assembly corpus for function %s", f)
 
