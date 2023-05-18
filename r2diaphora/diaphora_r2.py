@@ -361,16 +361,17 @@ class CIDABinDiff(diaphora.CBinDiff):
             #if demangled_name != "":
             #    name = demangled_name
             if name.startswith("section..") or name.startswith("sym.imp."):
-                log.info(f"Skipping uninteresting function {name}")
+                log.info("Skipping uninteresting function %s", name)
                 return False
 
         except Exception:
-            log.error(f"Could not read function name for address {f}")
+            log.error("Could not read function name for address %s", f)
 
         # WTF
         f = int(f)
 
         fninfo = get_func(f)
+        log.debug("fninfo: %s", fninfo)
         flow = log_exec_r2_cmdj(f"afbj @ {f}")
         size = fninfo.get("size", 0)
 
@@ -387,7 +388,7 @@ class CIDABinDiff(diaphora.CBinDiff):
 
         nodes = 0
         edges = 0
-        instructions = fninfo["ninstrs"]
+        instructions = fninfo.get("ninstrs", 0)
         mnems = []
         dones = {}
         names = set()
@@ -419,7 +420,7 @@ class CIDABinDiff(diaphora.CBinDiff):
         mnemonics_spp = 1
         image_base = self.get_base_address()
         s = time.time()
-        log.debug(f"Fn {name} - Starting block iteration")
+        log.debug("Fn %s - Starting block iteration", name)
         for block in flow:
             nodes += 1
             block.update({"start": block["addr"], "end": block["addr"] + block["size"] })
@@ -448,9 +449,9 @@ class CIDABinDiff(diaphora.CBinDiff):
                         assembly[block_ea] = [disasm]
                     else:
                         try:
-                            assembly[block_ea] = ["loc_%x:" % x, disasm]
+                            assembly[block_ea] = [f"loc_{x:x}:" % x, disasm]
                         except Exception:
-                            assembly[block_ea] = ["loc_%s:" % x, disasm]
+                            assembly[block_ea] = [f"loc_{x}:", disasm]
 
                 for oper in ins.get("opex", {}).get("operands", []):
                     if oper["type"] == "imm":
@@ -538,7 +539,7 @@ class CIDABinDiff(diaphora.CBinDiff):
                 if pred_block not in dones:
                     dones[pred_block] = 1
 
-        log.debug(f"Fn {name} - Block iteration: {time.time() - s}s")
+        log.debug("Fn %s - Block iteration: %ss", name, time.time() - s)
 
         switches = self.get_switches_info_for_fn(f)
 
@@ -574,7 +575,7 @@ class CIDABinDiff(diaphora.CBinDiff):
                     kgh_hash *= FEATURE_LOOP
 
         kgh_hash *= (FEATURE_STRONGLY_CONNECTED ** len(strongly_connected))
-        log.debug(f"Fn {name} - Topological analysis: {time.time() - s}s")
+        log.debug("Fn %s - Topological analysis: %ss", name, time.time() - s)
 
         asm = self.build_asm_corpus(assembly, f, image_base)
 
@@ -802,7 +803,7 @@ class CIDABinDiff(diaphora.CBinDiff):
         # condition.
         local_types = GetMaxLocalType()
         if (local_types & 0x80000000) != 0:
-            log.warning("GetMaxLocalType returned a negative number (0x%x)!" % local_types)
+            log.warning("GetMaxLocalType returned a negative number (0x%x)!", local_types)
             return
 
         # XXX this is not working
@@ -974,11 +975,11 @@ def dbname_for_file(filepath):
 def generate_db_for_file(filepath, override_if_existing = False, function_filter = None):
     dbname = dbname_for_file(filepath)
     if diaphora.db_exists(dbname) and override_if_existing:
-        log.info(f"Dropping database {dbname} as it was specified to override it")
+        log.info("Dropping database %s as it was specified to override it", dbname)
         diaphora.drop_db(dbname)
     
     if not diaphora.db_exists(dbname):
-        log.info(f"Generating database {dbname} for file {filepath}")
+        log.info("Generating database %s for file %s", dbname, filepath)
         _gen_diaphora_db(filepath, dbname, function_filter=function_filter)
 
 def compare_dbs(db1name, db2name):
