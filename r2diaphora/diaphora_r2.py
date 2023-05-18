@@ -42,6 +42,16 @@ from r2diaphora.jkutils.graph_hashes import *
 
 from r2diaphora.idaapi.idaapi_to_r2 import *
 
+LOG_FORMAT = "%(asctime)-15s [%(levelname)s] - %(message)s"
+log = logging.getLogger("diaphora.r2")
+log.setLevel(logging.INFO)
+
+console = logging.StreamHandler()
+console.setLevel(logging.INFO)
+formatter = logging.Formatter(LOG_FORMAT)
+console.setFormatter(formatter)
+log.addHandler(console)
+
 def raise_timeout(signum, frame):
     raise TimeoutError
 
@@ -990,20 +1000,9 @@ def compare_dbs(db1name, db2name):
 
 def main():
     import argparse
-
-    LOG_FORMAT = "%(asctime)-15s [%(levelname)s] - %(message)s"
-    log = logging.getLogger("diaphora.r2")
-    log.setLevel(logging.INFO)
-
-    console = logging.StreamHandler()
-    console.setLevel(logging.INFO)
-    formatter = logging.Formatter(LOG_FORMAT)
-    console.setFormatter(formatter)
-    log.addHandler(console)
-
     if os.getenv("MODE") == "DEBUG":
         print("[*] Running in DEBUG mode")
-        fh = RotatingFileHandler("diaphora_debug.log", maxBytes=1073741824, backupCount=5)      # 1GB
+        fh = RotatingFileHandler("diaphora_debug.log", maxBytes=1073741824, backupCount=5) # 1GB
         fh.setLevel(logging.DEBUG)
         formatter = logging.Formatter(LOG_FORMAT)
         fh.setFormatter(formatter)
