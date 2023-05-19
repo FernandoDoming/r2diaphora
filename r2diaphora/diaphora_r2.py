@@ -298,7 +298,7 @@ class CIDABinDiff(diaphora.CBinDiff):
                 if ret:
                     t = ret
             except Exception:
-                log.warning("Cannot decompile 0x%x: %s" % (ea, str(sys.exc_info()[1])))
+                log.exception("Cannot decompile 0x%x", ea)
         return t
 
     # Ripped out from REgoogle
@@ -346,7 +346,10 @@ class CIDABinDiff(diaphora.CBinDiff):
         try:
             ret = self.read_function(f)
         except TimeoutError:
-            log.warning("Timeout while reading function at 0x%s", f)
+            log.warning(
+                "Timeout while reading function at 0x%s from file %s",
+                f, log_exec_r2_cmdj("ij").get("core", {}).get("file", "PATH ERROR")
+            )
         except Exception:
             log.exception(
                 "Exception while trying to read function at 0x%x in sample %s",
@@ -654,13 +657,19 @@ class CIDABinDiff(diaphora.CBinDiff):
         if name.startswith("flirt."):
             kgh_hash *= FEATURE_FUNC_LIB
 
+        try:
+            kgh_hash = str(kgh_hash)
+        except ValueError:
+            log.error("Could not convert kgh_hash with value %d into string", kgh_hash)
+            kgh_hash = "0"
+
         return (name, nodes, edges, indegree, outdegree, size, instructions, mnems, names,
                          proto, cc, prime, f, comment, true_name, bytes_hash, pseudo, pseudo_lines,
                          pseudo_hash1, pseudocode_primes, function_flags, asm, proto2,
                          pseudo_hash2, pseudo_hash3, len(strongly_connected), loops, rva, bb_topological,
                          strongly_connected_spp, clean_assembly, clean_pseudo, mnemonics_spp, switches,
                          function_hash, bytes_sum, md_index, constants, len(constants), seg_rva,
-                         assembly_addrs, str(kgh_hash), None,
+                         assembly_addrs, kgh_hash, None,
                          callers, callees,
                          basic_blocks_data, bb_relations)
 
