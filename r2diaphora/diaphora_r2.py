@@ -297,8 +297,8 @@ class CIDABinDiff(diaphora.CBinDiff):
                 ret = self.decompile_and_get(ea)
                 if ret:
                     t = ret
-            except Exception:
-                log.exception("Cannot decompile 0x%x", ea)
+            except Exception as e:
+                log.error("Cannot decompile 0x%x: %s", ea, e)
         return t
 
     # Ripped out from REgoogle

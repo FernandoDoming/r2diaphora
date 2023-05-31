@@ -532,8 +532,15 @@ def diaphora_decode(x):
 #-----------------------------------------------------------------------
 def SegStart(ea):
     # Just return the segment's start address
+    curr_seg = {}
     try:
-        return int(log_exec_r2_cmd("iS.~1[3]"), 16)
+        segments = log_exec_r2_cmdj("iSj")
+        for seg in segments:
+            if seg["vaddr"] <= ea <= seg["vaddr"] + seg["size"]:
+                curr_seg = seg
+                break
+
+        return curr_seg.get("vaddr", 0)
     except Exception:
         return 0
 

@@ -716,17 +716,17 @@ class CBinDiff:
         # The last 4 fields are callers, callees, basic_blocks_data & bb_relations
         for prop in props[:len(props)-4]:
             # XXX: Fixme! This is a hack for 64 bit architectures kernels
-            if type(prop) is int and (prop > 0xFFFFFFFF or prop < -0xFFFFFFFF):
+            if isinstance(prop, int) and (prop > 0xFFFFFFFF or prop < -0xFFFFFFFF):
                 try:
                     prop = str(prop)
-                except ValueError:
-                    log.warning("Could not convert prop %s to string", prop)
+                except ValueError as e:
+                    log.warning("Could not convert prop %d to string: %s", prop, e)
                     prop = ""
 
-            elif type(prop) is bytes:
+            elif isinstance(prop, bytes):
                 prop = prop.encode("utf-8")
 
-            if type(prop) is list or type(prop) is set:
+            if isinstance(prop, list) or isinstance(prop, set):
                 new_props.append(json.dumps(list(prop), ensure_ascii=False, cls=bytes_encoder))
 
             else:
