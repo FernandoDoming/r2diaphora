@@ -59,7 +59,7 @@ def raise_timeout(signum, frame):
 g_bindiff_opts = {
     "decompiler_command": "pdg",
     "use_decompiler": True,
-    "rebuild_ast": False,
+    "rebuild_ast": True,
 }
 
 def round_up_to_even(f):
@@ -261,24 +261,40 @@ class CIDABinDiff(diaphora.CBinDiff):
                    .replace("obj.", "")\
                    .replace("noreturn", "")
 
-    def decompile_and_get(self, ea):
-        sv = decompile(ea, decompiler_command=self.decompiler_command);
+    def decompile_and_get(self, ea, timeout = 15):
+        # Register a function to raise a TimeoutError on the signal.
+        signal.signal(signal.SIGALRM, raise_timeout)
+        # Schedule the signal to be sent after `timeout`.
+        signal.alarm(timeout)
+        sv = None
+        try:
+            sv = decompile(ea, decompiler_command=self.decompiler_command);
+        except TimeoutError:
+            log.warning(
+                "Timeout (%ds) while attempting to decompile 0x%x",
+                timeout, ea
+            )
+        finally:
+            # Unregister the signal so it won't be triggered
+            # if the timeout is not reached.
+            signal.signal(signal.SIGALRM, signal.SIG_IGN)
+
         if sv is None:
             # Failed to decompile
             return None
 
+        self.pseudo_hash[ea] = 1
         if self.rebuild_ast:
-            visitor = CAstVisitor()
-            visitor.apply_to(
-                f"""
-                {self.clean_pseudocode(sv)}
-                """
-            )
-            self.pseudo_hash[ea] = visitor.primes_hash
-        else:
-            self.pseudo_hash[ea] = 1
-        self.pseudo[ea] = []
+            try:
+                self.pseudo_hash[ea] = calc_pseudo_hash(ea)
+            except Exception:
+                log.exception(
+                    "Exception while calculating pseudocode primes hash for function 0x%x",
+                    ea
+                )
+                self.pseudo_hash[ea] = 1
 
+        self.pseudo[ea] = []
         first_line = None
         for line in sv.split("\n"):
             if line == "" or line.startswith("//"):
@@ -444,7 +460,11 @@ class CIDABinDiff(diaphora.CBinDiff):
             bb_topological[idx] = []
             bb_topo_num[block_ea] = idx
 
-            for x in block["instrs"]:
+            instrs = block.get("instrs", [])
+            if not instrs:
+                log.warning("No instrs for block at 0x%x", block["addr"])
+
+            for x in instrs:
                 _, ins = diaphora_decode(x)
                 mnem   = ins["mnemonic"]
                 disasm = ins["disasm"]
@@ -904,7 +924,7 @@ def _diff_or_export(function_filter = None, dbname = None, userdata = "", **opti
         bd = CIDABinDiff(opts.file_out)
         bd.use_decompiler_always = (get_arch() != "sh") and g_bindiff_opts.get("use_decompiler", True)
         bd.decompiler_command = g_bindiff_opts.get("decompiler_command", "pdg")
-        bd.rebuild_ast = g_bindiff_opts.get("rebuild_ast", False)
+        bd.rebuild_ast = g_bindiff_opts.get("rebuild_ast", True)
         bd.exclude_library_thunk = opts.exclude_library_thunk
         bd.unreliable = opts.unreliable
         bd.slow_heuristics = opts.slow
@@ -1072,12 +1092,6 @@ def main():
         help="Analyze ALL functions (by default library functions are skipped)"
     )
 
-    parser.add_argument(
-        "--ast",
-        action='store_true',
-        help="Attempt to rebuild AST from the decompiler output for additional function traits"
-    )
-
     args = parser.parse_args()
     args.file1 = args.file1[0]
     decompiler_commands = {
@@ -1087,7 +1101,6 @@ def main():
 
     g_bindiff_opts["decompiler_command"] = decompiler_commands.get(args.decompiler)
     g_bindiff_opts["use_decompiler"] = not args.no_decompiler
-    g_bindiff_opts["rebuild_ast"] = args.ast
 
     db1name = dbname_for_file(args.file1)
     bd = diaphora.CBinDiff(db1name)

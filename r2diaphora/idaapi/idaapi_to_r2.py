@@ -7,7 +7,7 @@ import platform
 
 import subprocess
 from subprocess import Popen
-from pycparser import CParser, c_ast
+import xml.etree.ElementTree as ET
 
 from r2diaphora.jkutils.factor import primesbelow as primes
 from .instructions import CPU_INSTRUCTIONS
@@ -111,180 +111,21 @@ EXPR_DEFS = {
     "cit_return"   : 80,  # return-statement
     "cit_goto"     : 81,  # goto-statement
     "cit_asm"      : 82,  # asm-statement
+    "cit_swi"      : 83,  # Extra for ghidra: software interruption (int x)
+    "cit_rdtsc"    : 84,  # Extra for ghidra: rdtsc instruction
+    "cit_aesenc"   : 85,  # Extra for ghidra: aesenc instruction
+    "cit_pshufhw"  : 86,  # Extra for ghidra: pshufhw instruction
+    "cit_pshuflw"  : 87,  # Extra for ghidra: pshuflw instruction
 }
-#-------------------------------------------------------------------------------
-class CAstVisitor(c_ast.NodeVisitor):
-    def __init__(self):
-        self.primes      = primes(4096)
-        self.primes_hash = 1
-        self.cfunc       = None
-        self.ast         = None
-        return
-
-    def apply_to(self, pseudo):
-        self.cfunc = pseudo
-        if self.build_ast():
-            self.visit(self.ast.ext[-1])
-
-    def build_ast(self):
-        pseudo = f"""
-        #include <stdlib.h>
-
-        {self.cfunc}
-        """
-        dirname  = os.path.dirname(__file__)
-        libdir = os.path.abspath(
-            os.path.join(dirname, "..", "pycparser", "fake_libc_include")
-        )
-        parser = CParser()
-
-        try:
-            p = Popen(
-                ["gcc", "-nostdinc", "-E", f"-I{libdir}", "-xc", "-"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
-            stdout, stderr = p.communicate(bytes(pseudo, "utf-8"))
-            self.ast = parser.parse(stdout.decode("utf-8"))
-            return True
-
-        except Exception:
-            # log.exception(f"Could not obtain AST for {pseudo}")
-            return False
-
-    def visit_FuncCall(self, node):
-        self.primes_hash *= self.primes[EXPR_DEFS["cot_call"]]
-
-    def visit_If(self, node):
-        self.primes_hash *= self.primes[EXPR_DEFS["cit_if"]]
-
-    def visit_For(self, node):
-        self.primes_hash *= self.primes[EXPR_DEFS["cit_for"]]
-
-    def visit_While(self, node):
-        self.primes_hash *= self.primes[EXPR_DEFS["cit_while"]]
-
-    def visit_DoWhile(self, node):
-        self.primes_hash *= self.primes[EXPR_DEFS["cit_do"]]
-
-    def visit_Switch(self, node):
-        self.primes_hash *= self.primes[EXPR_DEFS["cit_switch"]]
-
-    def visit_Break(self, node):
-        self.primes_hash *= self.primes[EXPR_DEFS["cit_break"]]
-
-    def visit_Continue(self, node):
-        self.primes_hash *= self.primes[EXPR_DEFS["cit_continue"]]
-
-    def visit_Assignment(self, node):
-        if node.op == "=":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_asg"]]
-        elif node.op == "|=":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_asgbor"]]
-        elif node.op == "^=":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_asgxor"]]
-        elif node.op == "&=":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_asgband"]]
-        elif node.op == "+=":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_asgadd"]]
-        elif node.op == "-=":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_asgsub"]]
-        elif node.op == "*=":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_asgmul"]]
-        elif node.op == ">>=":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_asgsshr"]]
-        elif node.op == "<<=":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_asgshl"]]
-        elif node.op == "/=":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_asgsdiv"]]
-        elif node.op == "%=":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_asgsmod"]]
-
-    def visit_TernaryOp(self, node):
-        self.primes_hash *= self.primes[EXPR_DEFS["cot_tern"]]
-
-    def visit_BinaryOp(self, node):
-        if node.op == "+":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_add"]]
-        elif node.op == "-":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_sub"]]
-        elif node.op == "*":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_mul"]]
-        elif node.op == "/":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_sdiv"]]
-        elif node.op == "%":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_smod"]]
-        elif node.op == ">":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_sgt"]]
-        elif node.op == "<":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_slt"]]
-        elif node.op == ">>":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_sshr"]]
-        elif node.op == "<<":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_shl"]]
-        elif node.op == "^":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_xor"]]
-        elif node.op == "&":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_band"]]
-        elif node.op == "&&":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_land"]]
-        elif node.op == "|":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_bor"]]
-        elif node.op == "||":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_lor"]]
-        elif node.op == "==":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_eq"]]
-        elif node.op == "!=":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_ne"]]
-        elif node.op == ">=":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_sge"]]
-        elif node.op == "<=":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_sle"]]
-
-    def visit_UnaryOp(self, node):
-        if node.op == "sizeof":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_sizeof"]]
-        elif node.op == "p++":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_postinc"]]
-        elif node.op == "p--":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_postdec"]]
-        elif node.op == "++p":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_preinc"]]
-        elif node.op == "--p":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_predec"]]
-        elif node.op == "!":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_lnot"]]
-        elif node.op == "&":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_ref"]]
-        elif node.op == "~":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_bnot"]]
-        elif node.op == "*":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_ptr"]]
-
-    def visit_ArrayRef(self, node):
-        self.primes_hash *= self.primes[EXPR_DEFS["cot_idx"]]
-
-    def visit_StructRef(self, node):
-        if node.type == ".":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_memref"]]
-        elif node.type == "->":
-            self.primes_hash *= self.primes[EXPR_DEFS["cot_memptr"]]
-
-    def visit_Return(self, node):
-        self.primes_hash *= self.primes[EXPR_DEFS["cit_return"]]
-
 #-----------------------------------------------------------------------
 def log_exec_r2_cmdj(cmd):
-    s = time.time()
+    log.debug("R2 CMDJ: %s", cmd)
     r = r2.cmdj(cmd)
-    log.debug(f"R2 CMDJ: {cmd}: {time.time() - s}s")
     return r
 
 def log_exec_r2_cmd(cmd):
-    s = time.time()
+    log.debug("R2 CMD: %s", cmd)
     r = r2.cmd(cmd)
-    log.debug(f"R2 CMD: {cmd}: {time.time() - s}s")
     return r
 
 #-----------------------------------------------------------------------
@@ -489,6 +330,141 @@ def GetStructIdByName(x):
 #-----------------------------------------------------------------------
 def decompile(ea, decompiler_command = "pdg"):
     return log_exec_r2_cmd(f"{decompiler_command} @ {ea}")
+
+def calc_pseudo_hash(ea):
+    primes_nums = primes(4096)
+    primes_hash = 1
+
+    xml = log_exec_r2_cmd(f"pdgx @ {ea}")
+    tree = ET.ElementTree(ET.fromstring(xml))
+    parent_map = {c:p for p in tree.iter() for c in p}
+
+    tree_iter = tree.iter()
+    for elem in tree_iter:
+        expr = None
+        if elem.tag != "op" and elem.tag != "funcname" and elem.tag != "syntax":
+            continue
+
+        # Function but not the function prototype -> function call
+        if elem.tag == "funcname" and elem in parent_map and parent_map[elem].tag != "funcproto":
+            expr = "cot_call"
+
+        if elem.tag == "syntax" and elem.text == "do":
+            next(tree_iter)
+            elem_2 = next(tree_iter)
+            if elem_2.tag == "syntax" and elem_2.text == "{":
+                expr = "cit_do"
+
+        if elem.tag == "op" and elem.text is not None:
+            if elem.text == ", ":
+                expr = "cot_comma"
+            elif elem.text == "=":
+                expr = "cot_asg"
+            elif elem.text == "|=":
+                expr = "cot_asgbor"
+            elif elem.text == "^=":
+                expr = "cot_asgxor"
+            elif elem.text == "&=":
+                expr = "cot_asgband"
+            elif elem.text == "&=":
+                expr = "cot_asgband"
+            elif elem.text == "+=":
+                expr = "cot_asgadd"
+            elif elem.text == "-=":
+                expr = "cot_asgsub"
+            elif elem.text == "*=":
+                expr = "cot_asgmul"
+            elif elem.text == ">>=":
+                expr = "cot_asgsshr"
+            elif elem.text == "<<=":
+                expr = "cot_asgshl"
+            elif elem.text == "/=":
+                expr = "cot_asgsdiv"
+            elif elem.text == "%=":
+                expr = "cot_asgsmod"
+            elif elem.text == "||":
+                expr = "cot_lor"
+            elif elem.text == "&&":
+                expr = "cot_land"
+            elif elem.text == "|":
+                expr = "cot_bor"
+            elif elem.text == "^":
+                expr = "cot_xor"
+            elif elem.text == "&":
+                nxt = next(tree_iter)
+                if nxt.tag == "syntax" and nxt.text == " ":
+                    expr = "cot_band"
+                else:
+                    expr = "cot_ref"
+            elif elem.text == "!":
+                expr = "cot_lnot"
+            elif elem.text == "~":
+                expr = "cot_lnot"
+            elif elem.text == ".":
+                expr = "cot_memref"
+            elif elem.text == "==":
+                expr = "cot_eq"
+            elif elem.text == "!=":
+                expr = "cot_ne"
+            elif elem.text == ">=":
+                expr = "cot_sge"
+            elif elem.text == "<=":
+                expr = "cot_sle"
+            elif elem.text == ">":
+                expr = "cot_sgt"
+            elif elem.text == "<":
+                expr = "cot_slt"
+            elif elem.text == ">>":
+                expr = "cot_sshr"
+            elif elem.text == "<<":
+                expr = "cot_shl"
+            elif elem.text == "+":
+                expr = "cot_add"
+            elif elem.text == "-":
+                expr = "cot_sub"
+            elif elem.text == "*":
+                nxt = next(tree_iter)
+                if nxt.tag == "syntax" and nxt.text == " ":
+                    expr = "cot_mul"
+                elif elem in parent_map and parent_map[elem].tag != "vardecl":
+                    expr = "cot_ptr"
+            elif elem.text == "/":
+                expr = "cot_sdiv"
+            elif elem.text == "%":
+                expr = "cot_smod"
+            elif elem.text == "if":
+                expr = "cit_if"
+            elif elem.text == "for":
+                expr = "cit_for"
+            elif elem.text == "while":
+                expr = "cit_while"
+            elif elem.text == "do":
+                expr = "cit_do"
+            elif elem.text == "switch":
+                expr = "cit_switch"
+            elif elem.text == "break":
+                expr = "cit_break"
+            elif elem.text == "continue":
+                expr = "cit_continue"
+            elif elem.text == "return":
+                expr = "cit_return"
+            elif elem.text == "goto":
+                expr = "cit_goto"
+            elif elem.text == "swi":
+                expr = "cit_swi"
+            elif elem.text == "rdtsc":
+                expr = "cit_rdtsc"
+            elif elem.text == "aesenc":
+                expr = "cit_aesenc"
+            elif elem.text == "pshufhw":
+                expr = "cit_pshufhw"
+            elif elem.text == "pshuflw":
+                expr = "cit_aesenc"
+
+        if expr:
+            primes_hash *= primes_nums[EXPR_DEFS[expr]]
+
+    return primes_hash
 
 #-----------------------------------------------------------------------
 def get_func(ea):

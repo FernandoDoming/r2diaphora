@@ -35,7 +35,7 @@ class CustomInstall(install):
 
 setup(
     name="r2diaphora",
-    version="0.2.9",
+    version="0.3.0",
     description="radare2 port of diaphora",
     url="https://github.com/FernandoDoming/r2diaphora",
     author="Fernando Domínguez",
@@ -53,15 +53,15 @@ setup(
         "colorama>=0.4.4",
         "yattag>=1.14.0",
         "mysql-connector-python>=8.0.26",
-        "python_magic>=0.4.24",
-        "pycparser>=2.21"
     ],
 
     classifiers=[
         "Programming Language :: Python :: 3.5",
         "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: 3.7",
-        "Programming Language :: Python :: 3.8"
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
     ],
 
     entry_points = {
