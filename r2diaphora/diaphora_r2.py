@@ -491,7 +491,11 @@ class CIDABinDiff(diaphora.CBinDiff):
                         if self.is_constant(oper, x) and self.constant_filter(oper["value"]):
                             constants.append(oper["value"])
 
-                mnem_bytes = ins["bytes"][ins["mask"].find("f"):ins["mask"].rfind("f") + 1]
+                begin = ins["mask"].find("f")
+                end = ins["mask"].rfind("f") + 1
+
+                mnem_bytes = ins["bytes"][begin:end]
+                mnem_bytes = '0' * begin + mnem_bytes + '0' * (8 - end)
                 curr_bytes = bytes.fromhex(mnem_bytes)
 
                 bytes_hash.append(curr_bytes)
