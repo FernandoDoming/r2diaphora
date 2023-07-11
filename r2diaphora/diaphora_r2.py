@@ -23,7 +23,7 @@ along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 import os
 import re
-import sys
+import math
 import time
 import math
 import json
@@ -369,7 +369,7 @@ class CIDABinDiff(diaphora.CBinDiff):
         except Exception:
             log.exception(
                 "Exception while trying to read function at 0x%x in sample %s",
-                f, log_exec_r2_cmdj("ij").get("core", {}).get("file", "PATH ERROR")
+                int(f), log_exec_r2_cmdj("ij").get("core", {}).get("file", "PATH ERROR")
             )
         finally:
             # Unregister the signal so it won't be triggered
@@ -491,7 +491,12 @@ class CIDABinDiff(diaphora.CBinDiff):
                         if self.is_constant(oper, x) and self.constant_filter(oper["value"]):
                             constants.append(oper["value"])
 
-                mnem_bytes = ins["bytes"][ins["mask"].find("f"):ins["mask"].rfind("f") + 1]
+                ins_bytes  = int(ins["bytes"], 16)
+                mask       = int(ins["mask"], 16)
+                mnem_bytes = hex(ins_bytes & mask)[2:]
+                # If len of mnem_bytes is uneven, pad to next even number
+                pad_len    = math.ceil(len(mnem_bytes) / 2.) * 2
+                mnem_bytes = mnem_bytes.rjust(pad_len, "0")
                 curr_bytes = bytes.fromhex(mnem_bytes)
 
                 bytes_hash.append(curr_bytes)
