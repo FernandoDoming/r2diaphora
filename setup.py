@@ -1,9 +1,9 @@
 import os
-import shutil
-import glob
+from distutils.dir_util import copy_tree
 
 from setuptools import setup
 from setuptools.command.install import install
+
 class CustomInstall(install):
 
     def run(self):
@@ -27,11 +27,13 @@ class CustomInstall(install):
 
         dirname  = os.path.dirname(__file__)
         sigs_dir = os.path.join(dirname, "r2diaphora", "signatures", "flirt")
-        for f in glob.glob(f"{sigs_dir}/*.sig"):
-            shutil.copy2(
-                f,
-                os.path.join(os.path.expanduser("~"), ".r2diaphora", "signatures", "flirt")
-            )
+        for _, dirs, _ in os.walk(sigs_dir):
+            for d in dirs:
+                dir_path = os.path.join(sigs_dir, d)
+                copy_tree(
+                    dir_path,
+                    os.path.join(os.path.expanduser("~"), ".r2diaphora", "signatures", "flirt", d)
+                )
 
 setup(
     name="r2diaphora",

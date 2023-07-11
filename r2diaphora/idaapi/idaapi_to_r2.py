@@ -154,6 +154,14 @@ def get_all_fns(exclude_libs = False, function_filter = None):
 
 def scan_libs():
     sigs_dir = os.path.join(os.path.expanduser("~"), ".r2diaphora", "signatures", "flirt")
+    bin_info = log_exec_r2_cmdj("ij")["bin"]
+    arch_dir = bin_info["arch"]
+    if bin_info["arch"] == "x86" and bin_info["bits"] == 64:
+        arch_dir = "x64"
+    elif bin_info["arch"] == "arm" and bin_info["bits"] == 64:
+        arch_dir = "arm64"
+
+    sigs_dir = os.path.join(sigs_dir, arch_dir)
     if os.path.isdir(sigs_dir):
         log_exec_r2_cmd(f"zfs {sigs_dir}/*.sig")
 
