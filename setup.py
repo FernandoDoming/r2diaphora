@@ -37,7 +37,7 @@ class CustomInstall(install):
 
 setup(
     name="r2diaphora",
-    version="0.3.0",
+    version="0.3.1",
     description="radare2 port of diaphora",
     url="https://github.com/FernandoDoming/r2diaphora",
     author="Fernando Domínguez",
@@ -55,6 +55,7 @@ setup(
         "colorama>=0.4.4",
         "yattag>=1.14.0",
         "mysql-connector-python>=8.0.26",
+        "python-magic>=>0.4.27",
     ],
 
     classifiers=[
