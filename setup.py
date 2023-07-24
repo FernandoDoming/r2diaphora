@@ -55,7 +55,7 @@ setup(
         "colorama>=0.4.4",
         "yattag>=1.14.0",
         "mysql-connector-python>=8.0.26",
-        "python-magic>=>0.4.27",
+        "python-magic>=0.4.27",
     ],
 
     classifiers=[

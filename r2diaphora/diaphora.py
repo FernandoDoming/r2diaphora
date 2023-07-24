@@ -871,8 +871,9 @@ class CBinDiff:
         ]
         for size_limit in size_limits:
             idx = self.get_fn_prop_index(size_limit[0])
-            if idx == -1:
+            if idx == -1 or idx >= len(props) or not isinstance(props[idx], str):
                 continue
+
             props[idx] = props[idx][0:size_limit[1]]
 
     def get_fn_prop_index(self, key):
