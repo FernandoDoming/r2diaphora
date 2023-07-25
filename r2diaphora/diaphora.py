@@ -392,127 +392,139 @@ class CBinDiff:
     def create_schema(self):
         cur = self.db_cursor()
 
-        sql = f"""create database if not exists `{self.db_name}`"""
+        sql = f"""create database if not exists `{self.db_name}`
+                    character set = 'utf8mb4' collate = 'utf8mb4_general_ci';"""
         cur.execute(sql)
 
         sql = f"""use `{self.db_name}`"""
         cur.execute(sql)
 
-        sql = """ create table if not exists functions (
-                                                id integer primary key auto_increment,
-                                                name varchar(1024),
-                                                address bigint unsigned,
-                                                nodes integer,
-                                                edges integer,
-                                                indegree integer,
-                                                outdegree integer,
-                                                size integer,
-                                                instructions integer,
-                                                mnemonics mediumtext,
-                                                names text,
-                                                prototype varchar(1024),
-                                                cyclomatic_complexity integer,
-                                                primes_value integer,
-                                                comment text,
-                                                mangled_function varchar(1024),
-                                                bytes_hash varchar(100),
-                                                pseudocode mediumtext,
-                                                pseudocode_lines integer,
-                                                pseudocode_hash1 varchar(100),
-                                                pseudocode_primes text,
-                                                function_flags integer,
-                                                assembly mediumtext,
-                                                prototype2 varchar(1024),
-                                                pseudocode_hash2 varchar(100),
-                                                pseudocode_hash3 varchar(100),
-                                                strongly_connected integer,
-                                                loops integer,
-                                                rva integer,
-                                                tarjan_topological_sort text,
-                                                strongly_connected_spp text,
-                                                clean_assembly mediumtext,
-                                                clean_pseudo mediumtext,
-                                                mnemonics_spp text,
-                                                switches text,
-                                                function_hash varchar(100),
-                                                bytes_sum integer,
-                                                md_index double,
-                                                constants mediumtext,
-                                                constants_count integer,
-                                                segment_rva integer,
-                                                assembly_addrs text,
-                                                kgh_hash text,
-                                                userdata text) """
+        sql = """
+        create table if not exists functions (
+            id integer primary key auto_increment,
+            name varchar(1024),
+            address bigint unsigned,
+            nodes integer,
+            edges integer,
+            indegree integer,
+            outdegree integer,
+            size integer,
+            instructions integer,
+            mnemonics mediumtext,
+            names text,
+            prototype varchar(1024),
+            cyclomatic_complexity integer,
+            primes_value integer,
+            comment text,
+            mangled_function varchar(1024),
+            bytes_hash varchar(100),
+            pseudocode mediumtext,
+            pseudocode_lines integer,
+            pseudocode_hash1 varchar(100),
+            pseudocode_primes text,
+            function_flags integer,
+            assembly mediumtext,
+            prototype2 varchar(1024),
+            pseudocode_hash2 varchar(100),
+            pseudocode_hash3 varchar(100),
+            strongly_connected integer,
+            loops integer,
+            rva integer,
+            tarjan_topological_sort text,
+            strongly_connected_spp text,
+            clean_assembly mediumtext,
+            clean_pseudo mediumtext,
+            mnemonics_spp text,
+            switches text,
+            function_hash varchar(100),
+            bytes_sum integer,
+            md_index double,
+            constants mediumtext,
+            constants_count integer,
+            segment_rva integer,
+            assembly_addrs text,
+            kgh_hash text,
+            userdata text)
+            default charset=utf8mb4 collate=utf8mb4_general_ci;
+        """
         cur.execute(sql)
 
-        sql = """ create table if not exists program (
-                                id integer primary key auto_increment,
-                                callgraph_primes varchar(4098),
-                                callgraph_all_primes varchar(4098),
-                                processor varchar(256),
-                                md5sum varchar(100)
-                            ) """
+        sql = """create table if not exists program (
+                        id integer primary key auto_increment,
+                        callgraph_primes varchar(4098),
+                        callgraph_all_primes varchar(4098),
+                        processor varchar(256),
+                        md5sum varchar(100)
+                    ) default charset=utf8mb4 collate=utf8mb4_general_ci"""
         cur.execute(sql)
 
-        sql = """ create table if not exists program_data (
-                                id integer primary key auto_increment,
-                                name varchar(255),
-                                type varchar(255),
-                                value varchar(255)
-                            )"""
+        sql = """create table if not exists program_data (
+                        id integer primary key auto_increment,
+                        name varchar(255),
+                        type varchar(255),
+                        value varchar(255)
+                    ) default charset=utf8mb4 collate=utf8mb4_general_ci"""
         cur.execute(sql)
 
-        sql = """ create table if not exists version (value varchar(100)) """
+        sql = """ create table if not exists version (value varchar(100))
+                    default charset=utf8mb4 collate=utf8mb4_general_ci"""
         cur.execute(sql)
 
         sql = """ create table if not exists instructions (
-                                id integer primary key auto_increment,
-                                address bigint unsigned,
-                                disasm varchar(2048),
-                                mnemonic varchar(256),
-                                comment1 varchar(1024),
-                                comment2 varchar(1024),
-                                name text,
-                                type text,
-                                pseudocomment varchar(2048),
-                                pseudoitp integer) """
+                        id integer primary key auto_increment,
+                        address bigint unsigned,
+                        disasm varchar(2048),
+                        mnemonic varchar(256),
+                        comment1 varchar(1024),
+                        comment2 varchar(1024),
+                        name text,
+                        type text,
+                        pseudocomment varchar(2048),
+                        pseudoitp integer)
+                        default charset=utf8mb4 collate=utf8mb4_general_ci"""
         cur.execute(sql)
 
         sql = """ create table if not exists basic_blocks (
-                                id integer primary key auto_increment,
-                                num integer,
-                                address bigint unsigned)"""
+                        id integer primary key auto_increment,
+                        num integer,
+                        address bigint unsigned)
+                        default charset=utf8mb4 collate=utf8mb4_general_ci"""
         cur.execute(sql)
 
         sql = """ create table if not exists bb_relations (
-                                id integer primary key auto_increment,
-                                parent_id integer not null references basic_blocks(id) ON DELETE CASCADE,
-                                child_id integer not null references basic_blocks(id) ON DELETE CASCADE)"""
+                        id integer primary key auto_increment,
+                        parent_id integer not null references basic_blocks(id) ON DELETE CASCADE,
+                        child_id integer not null references basic_blocks(id) ON DELETE CASCADE)
+                        default charset=utf8mb4 collate=utf8mb4_general_ci"""
         cur.execute(sql)
 
         sql = """ create table if not exists bb_instructions (
-                                id integer primary key auto_increment,
-                                basic_block_id integer references basic_blocks(id) on delete cascade,
-                                instruction_id integer references instructions(id) on delete cascade)"""
+                        id integer primary key auto_increment,
+                        basic_block_id integer references basic_blocks(id) on delete cascade,
+                        instruction_id integer references instructions(id) on delete cascade)
+                        default charset=utf8mb4 collate=utf8mb4_general_ci"""
         cur.execute(sql)
 
         sql = """ create table if not exists function_bblocks (
-                                id integer primary key auto_increment,
-                                function_id integer not null references functions(id) on delete cascade,
-                                basic_block_id integer not null references basic_blocks(id) on delete cascade)"""
+                        id integer primary key auto_increment,
+                        function_id integer not null references functions(id) on delete cascade,
+                        basic_block_id integer not null references basic_blocks(id) on delete cascade)
+                        default charset=utf8mb4 collate=utf8mb4_general_ci"""
         cur.execute(sql)
         
         sql = """create table if not exists callgraph (
-                                id integer primary key auto_increment,
-                                func_id integer not null references functions(id) on delete cascade,
-                                address bigint unsigned not null,
-                                type varchar(100) not null)"""
+                        id integer primary key auto_increment,
+                        func_id integer not null references functions(id) on delete cascade,
+                        address bigint unsigned not null,
+                        type varchar(100) not null)
+                        default charset=utf8mb4 collate=utf8mb4_general_ci"""
         cur.execute(sql)
 
         sql = """create table if not exists constants (
-                                id integer primary key auto_increment,
-                                func_id integer not null references functions(id) on delete cascade,
-                                constant varchar(1024) not null)"""
+                        id integer primary key auto_increment,
+                        func_id integer not null references functions(id) on delete cascade,
+                        constant varchar(1024) not null)
+                        default charset=utf8mb4 collate=utf8mb4_general_ci"""
         cur.execute(sql)
 
         cur.execute("select 1 from version")
@@ -2200,7 +2212,8 @@ class CBinDiff:
 
         cur = results_db.cursor()
         try:
-            sql = f"create database if not exists `{filename}`"
+            sql = f"""create database if not exists `{filename}`
+                        character set = 'utf8mb4' collate = 'utf8mb4_general_ci';"""
             cur.execute(sql)
 
             sql = f"use `{filename}`"
@@ -2212,10 +2225,11 @@ class CBinDiff:
             sql = "insert into config values (%s, %s, %s, %s)"
             cur.execute(sql, (self.db_name, self.last_diff_db, VERSION_VALUE, time.asctime()))
 
-            sql = """create table results 
+            sql = """create table results
                 (type varchar(256), line varchar(256), address varchar(256), name varchar(256),
                 address2 varchar(256), name2 varchar(256), ratio float, bb1 varchar(256),
                 bb2 varchar(256), description varchar(256))
+                default charset=utf8mb4 collate=utf8mb4_general_ci;
             """
             cur.execute(sql)
 
