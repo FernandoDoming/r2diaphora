@@ -90,7 +90,7 @@ class CIDABinDiff(diaphora.CBinDiff):
 
         log.debug("FUNC LISTING IS %s", func_list)
         for i, func in enumerate(func_list, start = 1):
-            log.debug("PROPS FOR FUNC cur %s", func)
+            log.debug("Reading props for function %s", func)
             props = self.read_function_with_timeout(func, timeout = 60)
             if not props:
                 continue
@@ -117,12 +117,21 @@ class CIDABinDiff(diaphora.CBinDiff):
                 "Exported %s fn (%d/%d). Elapsed %d s, remaining time ~%d s", 
                 name, i, total_funcs, elapsed, remaining
             )
+            # Try to fix bug #30 and, also, try to speed up operations as
+            # doing a commit every 10 functions, as before, is overkill.
+            if total_funcs > 1000 and i % (total_funcs/1000) == 0:
+                self.db.commit()
+                self.db.start_transaction()
 
-        # Try to fix bug #30 and, also, try to speed up operations as
-        # doing a commit every 10 functions, as before, is overkill.
-        if total_funcs > 1000 and i % (total_funcs/1000) == 0:
-            self.db.commit()
-            self.db.start_transaction()
+            # Timeout control
+            if self.timeout and elapsed > self.timeout:
+                log.warning(
+                    "Timeout hit after %d seconds. Finishing analysis early.", self.timeout
+                )
+                break
+
+        self.db.commit()
+        self.db.start_transaction()
 
         md5sum = GetInputFileMD5()
         self.save_callgraph(str(callgraph_primes), json.dumps(callgraph_all_primes), md5sum)
@@ -943,7 +952,7 @@ def _diff_or_export(function_filter = None, dbname = None, userdata = "", **opti
         bd.ignore_small_functions = opts.ignore_small_functions
         bd.function_summaries_only = opts.func_summaries_only
         bd.max_processed_rows = diaphora.MAX_PROCESSED_ROWS * max(total_functions / 20000, 1)
-        bd.timeout = diaphora.TIMEOUT_LIMIT * max(total_functions / 20000, 1)
+        bd.timeout = options.get("timeout")
         bd.open_db()
         bd.export(function_filter, userdata)
         log.info(f"Database exported: {opts.file_out}")
@@ -998,14 +1007,15 @@ def _gen_diaphora_db(
         input_path: str,
         out_db: str,
         function_filter = None,
-        userdata = ""
+        userdata = "",
+        timeout = None
     ):
     global r2
     if not r2:
         r2_open(input_path)
 
     scan_libs()
-    _diff_or_export(function_filter, dbname=out_db, userdata=userdata)
+    _diff_or_export(function_filter, dbname=out_db, userdata=userdata, timeout = timeout)
     if r2:
         r2_close()
 
@@ -1016,7 +1026,7 @@ def dbname_for_file(filepath):
         hash = sha256(d).hexdigest();
     return hash
 
-def generate_db_for_file(filepath, override_if_existing = False, function_filter = None):
+def generate_db_for_file(filepath, override_if_existing = False, function_filter = None, timeout = None):
     dbname = dbname_for_file(filepath)
     if diaphora.db_exists(dbname) and override_if_existing:
         log.info("Dropping database %s as it was specified to override it", dbname)
@@ -1024,7 +1034,12 @@ def generate_db_for_file(filepath, override_if_existing = False, function_filter
     
     if not diaphora.db_exists(dbname):
         log.info("Generating database %s for file %s", dbname, filepath)
-        _gen_diaphora_db(filepath, dbname, function_filter=function_filter)
+        _gen_diaphora_db(
+            filepath, dbname,
+            function_filter = function_filter,
+            userdata = "",
+            timeout = timeout
+        )
 
 def compare_dbs(db1name, db2name):
     bd = diaphora.CBinDiff(db1name)
@@ -1096,6 +1111,12 @@ def main():
         action='store_true',
         help="Analyze ALL functions (by default library functions are skipped)"
     )
+    parser.add_argument(
+        "-t", "--timeout",
+        default=None,
+        type=int,
+        help="Timeout for analysis in seconds"
+    )
 
     args = parser.parse_args()
     args.file1 = args.file1[0]
@@ -1119,7 +1140,8 @@ def main():
     generate_db_for_file(
         args.file1,
         override_if_existing=args.force_db_override,
-        function_filter=fn_filter
+        function_filter=fn_filter,
+        timeout = args.timeout
     )
 
     if args.file2:
@@ -1127,7 +1149,8 @@ def main():
         generate_db_for_file(
             args.file2,
             override_if_existing=args.force_db_override,
-            function_filter=fn_filter
+            function_filter=fn_filter,
+            timeout = args.timeout
         )
 
         bd.open_db()

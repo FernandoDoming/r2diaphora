@@ -206,9 +206,9 @@ def string_values(min_str_len = 1):
 def block_succs(addr):
     res = []
     try:
-        bb = log_exec_r2_cmdj("afbj. @ %s" % (addr))
+        bb = log_exec_r2_cmdj(f"afbj. @ {addr}")
     except Exception:
-        log.error("NO BASIC BLOCK AT %s"%(addr))
+        log.error("NO BASIC BLOCK AT %s", addr)
         return res
 
     bb = bb[0]
@@ -225,13 +225,13 @@ def block_succs(addr):
 def block_preds(addr):
     res = set()
     try:
-        bbs = log_exec_r2_cmdj("afbj @ %s"%(addr))
+        bbs = log_exec_r2_cmdj(f"afbj @ {addr}")
     except Exception:
-        log.error("NO BASIC BLOCKS FOR %s"%(addr))
+        log.error("NO BASIC BLOCKS FOR %s", addr)
         return res
 
     if not bbs:
-        log.warn("EMPTY BB LIST FOR %s"%(addr))
+        log.warning("EMPTY BB LIST FOR %s", addr)
         return res
 
     for bb in bbs:
@@ -253,7 +253,7 @@ def int16(x):
         return int(x, 16)
     except Exception:
         if x != "":
-            log.error("ERROR converting %s"%(x))
+            log.error("ERROR converting %s to base16 integer", x)
         return 0
 
 def GetLocalTypeName(x):
