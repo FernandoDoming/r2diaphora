@@ -1,4 +1,7 @@
-import magic
+﻿try:
+    import magic
+except ImportError:
+    magic = None
 import difflib
 from yattag import Doc
 from hashlib import sha256
@@ -286,3 +289,4 @@ class HtmlResults():
         result = doc.getvalue()
         with open(filepath, "w") as f:
             f.write(result)
+
