@@ -1856,8 +1856,11 @@ class R2BinaryCache:
         if (run[-1].get("type") or "") not in _TERMINAL_TYPES:
             return
         if len(run) == 1 and self._is_iat_thunk(run[0]):
-            # ``jmp qword [IAT]`` entries are import thunks, not functions.
-            return
+            # A lone ``jmp qword [IAT]`` is an import thunk.  IDA exports it
+            # as a function only when code actually calls it; unreferenced
+            # thunks stay anonymous padding between functions.
+            if not self.code_refs_to.get(int(run[0]["addr"])):
+                return
         begin = int(run[0]["addr"])
         end = int(run[-1]["addr"]) + int(run[-1].get("size") or 1)
         self._add_funclet(begin, end, run)

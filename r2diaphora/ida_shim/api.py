@@ -274,12 +274,16 @@ _THUNK_JUMP_TYPES = {"jmp", "ujmp", "cjmp", "rjmp", "irjmp", "rcjmp", "ucjmp"}
 def _function_flags(func) -> int:
     """Approximate IDA's function flags.
 
-    ``FUNC_THUNK``: a single-instruction function that jumps through an IAT
-    slot (e.g. ``jmp qword [imp._XcptFilter]``).  ``FUNC_LIB`` requires FLIRT
-    signatures radare2 does not ship, so it is intentionally never set.
-
     ``FUNC_NORET``: reproduced transitively from the function's terminal
-    flow transfer (named noreturn import or another noreturn function)."""
+    flow transfer (named noreturn import or another noreturn function).
+
+    ``FUNC_THUNK``: a single-instruction function that jumps through an IAT
+    slot (``jmp qword [imp._XcptFilter]``).  Upstream's
+    ``exclude_library_thunk`` then drops it, matching IDA, which keeps such
+    entries out of its function list - unless a real symbol name elevates
+    them to an ordinary function (e.g. whoami.exe's wcstok stub, an
+    IDA-knowledge residual we cannot reproduce).  ``FUNC_LIB`` requires
+    FLIRT signatures radare2 does not ship."""
     cache = _cache()
     flags = 0
     if _func_noreturn(cache, func.start_ea, frozenset()):
@@ -295,8 +299,6 @@ def _function_flags(func) -> int:
     insn = insns[0]
     if (insn.get("type") or "") not in _THUNK_JUMP_TYPES:
         return flags
-    # IDA only sets FUNC_THUNK for jumps through an import (IAT) slot; a
-    # direct ``jmp <func>`` gets a ``$thunk$`` name but stays exported.
     ops = insn.get("ops") or []
     if not ops:
         return flags
@@ -614,6 +616,10 @@ def print_insn_mnem(ea: Any) -> str:
     if not cached:
         return ""
     mnemonic = cached.get("mnemonic") or (cached.get("disasm") or "").split(" ")[0]
+    # ``66 90`` is ``xchg ax, ax`` in Intel's encoding and IDA prints it as
+    # such; radare2 folds it into ``nop`` like a multi-byte filler.
+    if mnemonic == "nop" and (cached.get("bytes") or "").lower() == "6690":
+        return "xchg"
     return canonical_mnemonic(mnemonic)
 
 
