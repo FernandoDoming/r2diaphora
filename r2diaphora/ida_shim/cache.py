@@ -14,6 +14,7 @@ one script per phase is also faster: the whole of ``calc.exe`` is dumped in
 about 0.2 seconds.
 """
 
+import bisect
 import hashlib
 import json
 import os
@@ -69,6 +70,32 @@ _STOP_FLOW_TYPES = frozenset(
         "int3",
     }
 )
+
+# Instruction types that end a function: unconditional jumps out, returns,
+# and traps.  Gap-split functions must end on one of these.
+_TERMINAL_TYPES = frozenset(
+    {
+        "jmp",
+        "ujmp",
+        "ijmp",
+        "rjmp",
+        "irjmp",
+        "ret",
+        "iret",
+        "rret",
+        "hlt",
+        "ill",
+        "invalid",
+        "trap",
+        "int3",
+    }
+)
+
+_JMP_TYPES = frozenset(
+    {"jmp", "ujmp", "ijmp", "rjmp", "irjmp", "rcjmp", "ucjmp"}
+)
+
+_CALL_TYPES = frozenset({"call", "ucall", "icall", "rcall", "ircall"})
 
 OFFSET_OPERAND_TYPES = (O_MEM, O_IMM, O_FAR, O_NEAR, O_DISPL)
 
@@ -201,25 +228,395 @@ def parse_pe(path: str) -> Optional[PEInfo]:
     return PEInfo(image_base, sections, uninit, iat)
 
 
-def parse_pdata_entries(
-    pdata_bytes: bytes, image_base: int, exec_ranges: List[Tuple[int, int]]
-) -> List[int]:
-    """Return the function starts of a PE64 ``.pdata`` directory.
+#: FuncInfo magics seen in the wild: __CxxFrameHandler3 (0x19930520/21) and
+#: __CxxFrameHandler4 (0x19930522) handler data.
+_FUNCINFO_MAGICS = {0x19930520, 0x19930521, 0x19930522}
 
-    ``.pdata`` is page aligned, so after the real ``RUNTIME_FUNCTION`` entries
-    there is a zero-filled tail; entries whose begin/end are zero, inverted or
-    outside an executable section are padding or data and are skipped.
+
+def _read_cint(data: bytes, off: int) -> Tuple[int, int]:
+    """Read an FH4 compressed integer; return ``(value, next_offset)``.
+
+    The low bits of the first byte tag the length: ``0`` -> 1 byte,
+    ``01`` -> 2, ``011`` -> 3, ``0111`` -> 4, otherwise 5; the value is the
+    little-endian integer shifted right by the tag length.
     """
-    starts: List[int] = []
+    first = data[off]
+    if first & 1 == 0:
+        return first >> 1, off + 1
+    if first & 3 == 1:
+        return struct.unpack_from("<H", data, off)[0] >> 2, off + 2
+    if first & 7 == 3:
+        raw = data[off] | (data[off + 1] << 8) | (data[off + 2] << 16)
+        return raw >> 3, off + 3
+    if first & 0xF == 7:
+        return struct.unpack_from("<I", data, off)[0] >> 4, off + 4
+    return int.from_bytes(data[off:off + 5], "little") >> 5, off + 5
+
+
+def parse_eh_boundaries(
+    path: str, pe: PEInfo
+) -> Tuple[Dict[int, List[int]], List[int], List[int], Dict[int, List[int]]]:
+    """Parse PE64 ``.pdata`` unwind metadata for EH block boundaries/funclets.
+
+    For functions with a C++ exception handler, the unwind handler data is a
+    ``FuncInfo``/``FuncInfo4`` structure whose IP-to-state map lists every
+    address where the exception state changes.  IDA splits basic blocks at
+    those addresses; radare2 ignores them, so they must be recovered here.
+    Catch handlers, unwind actions and SEH scope handlers are funclets that
+    IDA exports as their own functions, so their addresses are collected too.
+
+    Returns ``({function_va: [boundary_va, ...]}, [funclet_va, ...],
+    [catch_funclet_va, ...])``.
+    """
+    boundaries: Dict[int, List[int]] = {}
+    funclets: List[int] = []
+    catch_funclets: List[int] = []
+    transitions: Dict[int, List[int]] = {}
+    if not pe.sections:
+        return boundaries, funclets, catch_funclets, transitions
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read()
+    except OSError:
+        return boundaries, funclets, catch_funclets, transitions
+
+    def rva2off(rva: int) -> Optional[int]:
+        va = pe.image_base + rva
+        for section in pe.sections:
+            if section["vaddr"] <= va < section["vaddr"] + max(
+                section["vsize"], section["size"]
+            ):
+                return section["paddr"] + (va - section["vaddr"])
+        return None
+
+    def exec_va(rva: int) -> Optional[int]:
+        va = pe.image_base + rva
+        for low, high in pe.exec_ranges:
+            if low <= va < high:
+                return va
+        return None
+
+    pdata = pe.section(".pdata")
+    if pdata is None or not pdata["size"]:
+        return boundaries, funclets
+    poff = pdata["paddr"]
+    base = pe.image_base
+    count = pdata["size"] // 12
+    for index in range(count):
+        try:
+            begin_rva, end_rva, unwind_rva = struct.unpack_from(
+                "<III", data, poff + index * 12
+            )
+            uoff = rva2off(unwind_rva)
+            if uoff is None or uoff + 4 > len(data):
+                continue
+            flags = data[uoff] & 0xF8
+            if not flags & 0x18:
+                continue  # no exception handler -> no state map
+            codes = data[uoff + 2]
+            # UNWIND_INFO: 4-byte header + 2-byte codes, DWORD aligned; the
+            # handler RVA and handler-data RVA follow immediately.
+            hoff = (uoff + 4 + 2 * codes + 3) & ~3
+            if hoff + 8 > len(data):
+                continue
+            handler_rva, hdata = struct.unpack_from("<II", data, hoff)
+            begin_va, end_va = base + begin_rva, base + end_rva
+            points = []
+            foff = rva2off(hdata)
+            if (
+                foff is not None
+                and foff + 28 <= len(data)
+                and struct.unpack_from("<I", data, foff)[0] in _FUNCINFO_MAGICS
+            ):
+                # __CxxFrameHandler3/4: handler data is an RVA to a FuncInfo
+                # structure; every IP-to-state transition is a block boundary.
+                fields = struct.unpack_from("<10i", data, foff)
+                _magic, max_st, disp_uw, n_try, disp_try, n_ip, disp_ip = fields[:7]
+                if 0 < n_ip <= 4096:
+                    ip_off = rva2off(disp_ip)
+                    if ip_off is not None and ip_off + n_ip * 8 <= len(data):
+                        for j in range(n_ip):
+                            ip, _state = struct.unpack_from("<2i", data, ip_off + j * 8)
+                            va = base + ip
+                            if begin_va < va < end_va:
+                                points.append(va)
+                # Unwind actions inside the function are destructor-call
+                # sites (block boundaries); outside the function they are
+                # standalone funclets IDA exports as functions.
+                if 0 < max_st <= 4096:
+                    uw_off = rva2off(disp_uw)
+                    if uw_off is not None and uw_off + max_st * 8 <= len(data):
+                        for j in range(max_st):
+                            _to, act = struct.unpack_from("<iI", data, uw_off + j * 8)
+                            va = exec_va(act)
+                            if va is not None:
+                                if begin_va < va < end_va:
+                                    points.append(va)
+                                else:
+                                    funclets.append(va)
+                # Try-block catch handler maps hold the catch$ funclet
+                # addresses IDA exports as separate functions.
+                if 0 < n_try <= 4096:
+                    t_off = rva2off(disp_try)
+                    if t_off is not None and t_off + n_try * 20 <= len(data):
+                        for j in range(n_try):
+                            _tl, _th, _ch, n_c, d_ch = struct.unpack_from(
+                                "<iiiIi", data, t_off + j * 20
+                            )
+                            if not 0 < n_c <= 64:
+                                continue
+                            ch_off = rva2off(d_ch)
+                            if ch_off is None or ch_off + n_c * 20 > len(data):
+                                continue
+                            for k in range(n_c):
+                                _a, _dt, _dco, d_h, _df = struct.unpack_from(
+                                    "<IiiIi", data, ch_off + k * 20
+                                )
+                                va = exec_va(d_h)
+                                if va is not None:
+                                    if begin_va < va < end_va:
+                                        points.append(va)
+                                    else:
+                                        funclets.append(va)
+                                        catch_funclets.append(va)
+            else:
+                # Other handler-data formats, tried in order:
+                #  1. an inline SCOPE_TABLE (__C_specific_handler stores the
+                #     record count in the handler-data dword itself; GS
+                #     handler data prefixes it with a cookie offset), or
+                #  2. a GS_HANDLER_DATA structure at the handler-data RVA
+                #     (cookie dword, then an inline SCOPE_TABLE), or
+                #  3. an FH4 FuncInfo4 record (__CxxFrameHandler4).
+                records = None
+                for count_off in (hoff + 4, hoff + 8, hoff + 12):
+                    records = _scope_records(data, count_off, begin_rva, end_rva)
+                    if records is not None:
+                        break
+                if records is None and foff is not None:
+                    for add in (4, 8, 12):
+                        records = _scope_records(
+                            data, foff + add, begin_rva, end_rva
+                        )
+                        if records is not None:
+                            break
+                if records is not None:
+                    for b2, e2, h2, jt in records:
+                        for va in (base + b2, base + e2, base + jt):
+                            if begin_va < va < end_va:
+                                points.append(va)
+                        for rva in (h2, jt):
+                            va = exec_va(rva)
+                            if va is not None:
+                                if begin_va < va < end_va:
+                                    points.append(va)
+                                else:
+                                    funclets.append(va)
+                elif foff is not None:
+                    trans: List[int] = []
+                    points.extend(
+                        _parse_fh4(
+                            data, foff, begin_va, end_va, base,
+                            rva2off, exec_va, funclets, catch_funclets, trans,
+                        )
+                    )
+                    if trans:
+                        transitions[begin_va] = trans
+            if points:
+                boundaries.setdefault(begin_va, [])
+                boundaries[begin_va] = sorted(set(boundaries[begin_va] + points))
+        except (struct.error, IndexError):
+            continue
+    return boundaries, funclets, catch_funclets, transitions
+
+
+def _scope_records(
+    data: bytes, count_off: int, begin_rva: int, end_rva: int
+) -> Optional[List[Tuple[int, int, int, int]]]:
+    """Return a validated ``SCOPE_TABLE`` or ``None``.
+
+    ``__C_specific_handler`` records are {Begin, End, Handler, JumpTarget}
+    dwords covering ranges inside the owning function; the strict range
+    check rejects handler data that is actually a different structure.
+    """
+    if count_off < 0 or count_off + 4 > len(data):
+        return None
+    (count,) = struct.unpack_from("<I", data, count_off)
+    if not 0 < count <= 256 or count_off + 4 + count * 16 > len(data):
+        return None
+    records = []
+    for j in range(count):
+        b2, e2, h2, jt = struct.unpack_from("<4I", data, count_off + 4 + j * 16)
+        if not (begin_rva <= b2 < e2 <= end_rva):
+            return None
+        records.append((b2, e2, h2, jt))
+    return records
+
+
+def _parse_fh4(
+    data: bytes,
+    foff: int,
+    begin_va: int,
+    end_va: int,
+    base: int,
+    rva2off,
+    exec_va,
+    funclets: List[int],
+    catch_funclets: List[int],
+    trans: List[int],
+) -> List[int]:
+    """Parse an FH4 ``FuncInfo4`` record for ``__CxxFrameHandler4``.
+
+    The byte at ``foff`` is a header bitfield: 0x01 isCatch, 0x02
+    isSeparated, 0x04 BBT, 0x08 has unwind map, 0x10 has try-block map.
+    Conditional compressed/RVA fields follow, then the IP-to-state map RVA.
+    """
+    points: List[int] = []
+    header = data[foff]
+    pos = foff + 1
+    if header & 0x04:
+        _bbt, pos = _read_cint(data, pos)
+    disp_uw = disp_try = None
+    if header & 0x08:
+        disp_uw = struct.unpack_from("<I", data, pos)[0]
+        pos += 4
+    if header & 0x10:
+        disp_try = struct.unpack_from("<I", data, pos)[0]
+        pos += 4
+    if pos + 4 > len(data):
+        return points
+    disp_ip = struct.unpack_from("<I", data, pos)[0]
+    pos += 4
+    if header & 0x01:
+        catch_funclets.append(begin_va)
+
+    def add_point(va: Optional[int]) -> None:
+        if va is not None and begin_va < va < end_va:
+            points.append(va)
+
+    def add_funclet(va: Optional[int]) -> None:
+        if va is None:
+            return
+        if begin_va < va < end_va:
+            points.append(va)
+        else:
+            funclets.append(va)
+
+    def ip_map(map_rva: int, map_base: int) -> None:
+        ioff = rva2off(map_rva)
+        if ioff is None:
+            return
+        count, p = _read_cint(data, ioff)
+        ip = 0
+        for _j in range(min(count, 4096)):
+            delta, p = _read_cint(data, p)
+            state, p = _read_cint(data, p)
+            ip += delta
+            # State transitions are only *candidate* boundaries, and only
+            # for functions with a try-block map: try-region starts are
+            # landing areas the EH dispatcher can reach, so IDA makes them
+            # basic blocks.  For destructor-only functions (no try map)
+            # the state changes are unwind bookkeeping and never split the
+            # chart.  Stored states are biased by one, so 0 means the
+            # invalid/-1 state (a scope exit) which never splits either.
+            va = map_base + ip
+            if begin_va < va < end_va and state >= 1 and disp_try is not None:
+                trans.append(va)
+
+    if header & 0x02:
+        # isSeparated: dispIPtoStateMap points at a list of
+        # {addrStartRVA, dispOfIPMap} pairs, one per code contribution.
+        soff = rva2off(disp_ip)
+        if soff is not None:
+            count, p = _read_cint(data, soff)
+            for _j in range(min(count, 64)):
+                a_rva, m_rva = struct.unpack_from("<II", data, p)
+                p += 8
+                ip_map(m_rva, base + a_rva)
+    else:
+        ip_map(disp_ip, begin_va)
+
+    if disp_uw is not None:
+        uoff = rva2off(disp_uw)
+        if uoff is not None:
+            count, p = _read_cint(data, uoff)
+            for _j in range(min(count, 4096)):
+                packed, p = _read_cint(data, p)
+                etype = packed & 3
+                if etype == 0:
+                    continue
+                action = struct.unpack_from("<I", data, p)[0]
+                p += 4
+                if etype in (1, 2):
+                    _obj, p = _read_cint(data, p)
+                add_funclet(exec_va(action))
+    if disp_try is not None:
+        toff = rva2off(disp_try)
+        if toff is not None:
+            count, p = _read_cint(data, toff)
+            for _j in range(min(count, 4096)):
+                _tl, p = _read_cint(data, p)
+                _th, p = _read_cint(data, p)
+                _ch, p = _read_cint(data, p)
+                harr = struct.unpack_from("<I", data, p)[0]
+                p += 4
+                aoff = rva2off(harr)
+                if aoff is None:
+                    continue
+                ncatch, p = _read_cint(data, aoff)
+                for _k in range(min(ncatch, 64)):
+                    hhdr = data[p]
+                    p += 1
+                    if hhdr & 0x01:
+                        _adj, p = _read_cint(data, p)
+                    if hhdr & 0x02:
+                        p += 4
+                    if hhdr & 0x04:
+                        _dco, p = _read_cint(data, p)
+                    (d_h,) = struct.unpack_from("<I", data, p)
+                    p += 4
+                    d_va = exec_va(d_h)
+                    if d_va is not None and begin_va < d_va < end_va:
+                        points.append(d_va)
+                    elif d_va is not None:
+                        funclets.append(d_va)
+                        catch_funclets.append(d_va)
+                    ncont = (hhdr >> 4) & 3
+                    for _c in range(min(ncont, 2)):
+                        cont, p = _read_cint(data, p)
+                        va = base + cont if hhdr & 0x08 else begin_va + cont
+                        add_point(va)
+    return points
+
+
+def parse_pdata_ranges(
+    pdata_bytes: bytes, image_base: int, exec_ranges: List[Tuple[int, int]]
+) -> List[Tuple[int, int]]:
+    """Return ``(begin, end)`` virtual addresses of each ``RUNTIME_FUNCTION``.
+
+    ``.pdata`` is page aligned, so after the real entries there is a
+    zero-filled tail; entries whose begin/end are zero, inverted or outside
+    an executable section are padding or data and are skipped.
+    """
+    ranges: List[Tuple[int, int]] = []
     for offset in range(0, len(pdata_bytes) - 11, 12):
         begin, end, _unwind = struct.unpack_from("<III", pdata_bytes, offset)
         if begin == 0 or end == 0 or end <= begin:
             continue
         start = image_base + begin
+        stop = image_base + end
         if not any(low <= start < high for low, high in exec_ranges):
             continue
-        starts.append(start)
-    return starts
+        ranges.append((start, stop))
+    return ranges
+
+
+def parse_pdata_entries(
+    pdata_bytes: bytes, image_base: int, exec_ranges: List[Tuple[int, int]]
+) -> List[int]:
+    """Return the function starts of a PE64 ``.pdata`` directory."""
+    return [begin for begin, _end in parse_pdata_ranges(
+        pdata_bytes, image_base, exec_ranges
+    )]
 
 
 def _capstone_engine(bits: int, big_endian: bool):
@@ -350,6 +747,19 @@ class R2BinaryCache:
         self.cmd_count = 0
 
         self.pe = parse_pe(self.input_path)
+        (
+            self.eh_boundaries,
+            self.eh_funclets,
+            self.eh_catch,
+            self.eh_transitions,
+        ) = (
+            parse_eh_boundaries(self.input_path, self.pe)
+            if self.pe
+            else ({}, [], [], {})
+        )
+        self.synthesized: set = set()
+        self.insn_owned: set = set()
+        self._orphan_pieces: List[dict] = []
         self.image_base = self.pe.image_base if self.pe else 0
         self.bits = 64 if self.image_base > 0xFFFFFFFF else 32
         self.arch = "x86"
@@ -381,6 +791,7 @@ class R2BinaryCache:
         self.decompiled: Dict[int, dict] = {}
         self.decompiler_available: Optional[bool] = None
         self._closed = False
+        self._pdata_range_cache: Optional[List[Tuple[int, int]]] = None
 
         self._build()
 
@@ -480,7 +891,10 @@ class R2BinaryCache:
 
     def get_code_refs_from(self, ea: int, flow: int = 0) -> List[int]:
         refs = list(self.code_refs_from.get(ea, []))
-        if flow:
+        # Only block-owned heads produce flow xrefs: stray decoded bytes in
+        # unowned padding (e.g. the ``nop`` before a function start) are not
+        # heads in IDA and carry no ``fl_F``.
+        if flow and ea in self.insn_owned:
             successor = _flow_successor(self.insns.get(ea))
             if successor is not None and successor not in refs:
                 refs.append(successor)
@@ -490,14 +904,25 @@ class R2BinaryCache:
         refs = list(self.code_refs_to.get(ea, []))
         if flow:
             predecessor_ea = self.insn_ends.get(ea)
-            if predecessor_ea is not None and predecessor_ea not in refs:
+            if (
+                predecessor_ea is not None
+                and predecessor_ea in self.insn_owned
+                and predecessor_ea not in refs
+            ):
                 predecessor = self.insns.get(predecessor_ea)
                 if _flow_successor(predecessor) == ea:
                     refs.append(predecessor_ea)
         return refs
 
     def get_data_refs_from(self, ea: int) -> List[int]:
-        return self.data_refs_from.get(ea, [])
+        # radare2's ``axtj`` reports pseudo-references like ``lea ecx,
+        # [rcx*2 + 1] -> 1`` that are not memory operands; IDA only creates
+        # data xrefs to mapped addresses.
+        return [
+            target
+            for target in self.data_refs_from.get(ea, [])
+            if self.is_mapped(target)
+        ]
 
     def get_segment_for(self, ea: int) -> Optional[dict]:
         for segment in self.segments:
@@ -581,13 +1006,19 @@ class R2BinaryCache:
                 digest.update(chunk)
         return digest.hexdigest()
 
+    def _pdata_ranges(self) -> List[Tuple[int, int]]:
+        if self._pdata_range_cache is None:
+            self._pdata_range_cache = []
+            if self.pe is not None and self.bits == 64:
+                raw = self.pe.read_section(self.input_path, ".pdata")
+                if raw:
+                    self._pdata_range_cache = parse_pdata_ranges(
+                        raw, self.pe.image_base, self.pe.exec_ranges
+                    )
+        return self._pdata_range_cache
+
     def _pdata_seeds(self) -> List[int]:
-        if self.pe is None or self.bits != 64:
-            return []
-        raw = self.pe.read_section(self.input_path, ".pdata")
-        if not raw:
-            return []
-        return parse_pdata_entries(raw, self.pe.image_base, self.pe.exec_ranges)
+        return [begin for begin, _end in self._pdata_ranges()]
 
     def _run_script(self, script: List[str]) -> str:
         handle, script_path = tempfile.mkstemp(suffix=".r2", prefix="r2diaphora_")
@@ -982,6 +1413,522 @@ class R2BinaryCache:
                         block["addr"], block["addr"] + max(block["size"], 1)
                     )
 
+        # The ``aoj <ninstrs>`` sweep decodes instructions linearly from the
+        # function start, so padding bytes inside the range (e.g. an ``int3``
+        # between two blocks) can consume slots and leave real instructions at
+        # the tail undecoded.  agfj's per-block ``instrs`` are authoritative:
+        # fill any gaps with single-instruction decodes.
+        missing = sorted(
+            {
+                head
+                for block in self.func_blocks.values()
+                for sub in block
+                for head in sub["instrs"]
+            }
+            - self.insns.keys()
+        )
+        for start in range(0, len(missing), self.chunk_size):
+            batch = missing[start : start + self.chunk_size]
+            script = ["e log.level=0"]
+            for head in batch:
+                script.append("s 0x%x" % head)
+                script.append("aoj 1")
+            raw = self._run_script(script)
+            try:
+                documents = _parse_json_stream(raw)
+            except json.JSONDecodeError:
+                documents = []
+            for document in documents:
+                if not isinstance(document, list):
+                    continue
+                for instruction in document:
+                    self._register_instruction(instruction)
+
+        self._synthesize_funclets()
+        self._split_unowned()
+        self._recover_gap_blocks()
+        self.insn_owned = {
+            head
+            for blocks in self.func_blocks.values()
+            for block in blocks
+            for head in block.get("instrs", ())
+        }
+        self._register_insn_refs()
+
+    def _register_insn_refs(self) -> None:
+        """Create code/data xrefs from every decoded instruction operand.
+
+        ``axtj`` only covers functions radare2 analyzed; synthesized
+        funclets and gap-recovered code carry call/jump instructions IDA
+        turns into xrefs as well (this is how destructor ``indegree`` picks
+        up the calls inside EH dtor funclets).
+        """
+        for ea, insn in self.insns.items():
+            itype = insn.get("type") or ""
+            if itype in ("call", "ucall", "icall", "rcall", "ircall"):
+                target = _int_or_none(insn.get("jump")) or _int_or_none(
+                    insn.get("ptr")
+                )
+                if target is not None:
+                    refs = self.code_refs_from.setdefault(ea, [])
+                    if target not in refs:
+                        refs.append(target)
+                    back = self.code_refs_to.setdefault(target, [])
+                    if ea not in back:
+                        back.append(ea)
+            elif itype in ("jmp", "cjmp", "ujmp", "ijmp", "rjmp", "irjmp"):
+                target = _int_or_none(insn.get("jump")) or _int_or_none(
+                    insn.get("ptr")
+                )
+                if target is None:
+                    continue
+                if self._is_executable(target):
+                    refs = self.code_refs_from.setdefault(ea, [])
+                    if target not in refs:
+                        refs.append(target)
+                    back = self.code_refs_to.setdefault(target, [])
+                    if ea not in back:
+                        back.append(ea)
+                else:
+                    refs = self.data_refs_from.setdefault(ea, [])
+                    if target not in refs:
+                        refs.append(target)
+                    back = self.data_refs_to.setdefault(target, [])
+                    if ea not in back:
+                        back.append(ea)
+        self._register_continuation_refs()
+
+    def _register_continuation_refs(self) -> None:
+        """MSVC funclet epilogues do ``lea reg, [target]; ret`` to resume the
+        parent function.  IDA resolves the loaded address as the jump target
+        and records a code xref at the ``ret``; radare2 only sees a data
+        reference on the ``lea``.  Recreate the code xref so ``outdegree``
+        and the callee's ``indegree`` match IDA's view.
+        """
+        # The load and the ``ret`` sit in one straight-line block but are not
+        # adjacent (``lea rax, [x]; add rsp, N; pop rbp; ret``), so scan back
+        # through the epilogue instructions of each ``ret``-ending block.
+        for blocks in self.func_blocks.values():
+            for block in blocks:
+                instrs = block.get("instrs") or ()
+                if not instrs:
+                    continue
+                tail = self.insns.get(instrs[-1]) or {}
+                if (tail.get("type") or "") != "ret":
+                    continue
+                for head in reversed(instrs[:-1]):
+                    prev = self.insns.get(head) or {}
+                    itype = prev.get("type") or ""
+                    if itype in ("mov", "lea"):
+                        target = self._operand_code_va(prev)
+                        if target is not None:
+                            ea = int(instrs[-1])
+                            refs = self.code_refs_from.setdefault(ea, [])
+                            if target not in refs:
+                                refs.append(target)
+                            back = self.code_refs_to.setdefault(target, [])
+                            if ea not in back:
+                                back.append(ea)
+                        break
+                    if itype in _TERMINAL_TYPES or itype in _CALL_TYPES:
+                        break
+
+    def _operand_code_va(self, insn: dict) -> Optional[int]:
+        """Immediate/mem operand of ``insn`` that points at executable code."""
+        for op in insn.get("ops") or ():
+            value = _int_or_none(op.get("value"))
+            if value is not None and self._is_executable(value):
+                return value
+        return None
+
+    def _synthesize_funclets(self) -> None:
+        """Create function records for ``.pdata`` ranges radare2 never made.
+
+        radare2 folds SEH funclets (``catch$N``/``dtor$N``) into the parent
+        function's span: they are absent from ``aflj`` and their blocks from
+        ``afbj``, so ``af @ <funclet>`` also no-ops inside the parent.  IDA
+        exports every funclet as its own function.  For each .pdata range
+        that does not already start a function, decode the instructions and
+        rebuild a basic-block view directly.
+        """
+        orphans = [
+            (begin, end)
+            for begin, end in self._pdata_ranges()
+            if begin not in self.functions
+        ]
+        # EH metadata names funclets that never get a .pdata entry of their
+        # own (dtor$/catch$ helpers); infer their end from the next known
+        # code boundary.  An address already inside another function's
+        # blocks is ordinary code, not a funclet.
+        covered: List[Tuple[int, int]] = []
+        for blocks in self.func_blocks.values():
+            for block in blocks:
+                covered.append(
+                    (block["addr"], block["addr"] + max(block["size"], 1))
+                )
+        covered.sort()
+        covered_starts = [span[0] for span in covered]
+
+        def block_covered(address: int) -> bool:
+            index = bisect.bisect_right(covered_starts, address) - 1
+            return (
+                index >= 0
+                and covered[index][0] <= address < covered[index][1]
+            )
+
+        bounds = sorted(
+            set(self.functions) | {b for b, _ in self._pdata_ranges()}
+            | set(self.eh_funclets)
+        )
+        for va in sorted(set(self.eh_funclets)):
+            if va in self.functions or block_covered(va):
+                continue
+            stop = min((b for b in bounds if b > va), default=va + 0x400)
+            orphans.append((va, min(stop, va + 0x400)))
+        if not orphans:
+            return
+        # MSVC emits adjacent funclets whose .pdata ranges overlap; a funclet
+        # effectively ends where the next nested entry begins.
+        starts = sorted(self._pdata_ranges())
+        trimmed = []
+        for begin, end in orphans:
+            stop = next((b for b, _ in starts if begin < b < end), end)
+            trimmed.append((begin, min(stop, end)))
+        orphans = trimmed
+        script = ["e log.level=0"]
+        for begin, end in orphans:
+            script.append("?e " + SECTION_PREFIX + "u:%x" % begin)
+            script.append("s 0x%x" % begin)
+            script.append("aoj %d" % max(1, end - begin))
+        raw = self._run_script(script)
+        data = _split_sections(raw)
+        for begin, end in orphans:
+            decoded = []
+            for document in _parse_json_stream(data.get("u:%x" % begin) or ""):
+                if isinstance(document, list):
+                    decoded.extend(document)
+            insns = [
+                insn for insn in decoded
+                if begin <= int(insn.get("addr") or 0) < end
+            ]
+            insns.sort(key=lambda insn: insn["addr"])
+            while insns and _is_padding_insn(insns[-1]):
+                insns.pop()
+            if not insns:
+                continue
+            for insn in insns:
+                self._register_instruction(insn)
+            self._add_funclet(begin, end, insns)
+
+        if any(begin in self.functions for begin, _ in orphans):
+            self.sorted_func_eas = sorted(self.functions)
+            self._func_starts = list(self.sorted_func_eas)
+
+    def _add_funclet(self, begin: int, end: int, insns: List[dict]) -> None:
+        """Register a synthetic function at ``begin`` built from ``insns``.
+
+        Blocks are reconstructed the way IDA's analyzer does it: a new block
+        starts at every in-range branch target and after every instruction
+        that does not fall through.
+        """
+        by_addr = {int(insn["addr"]): insn for insn in insns}
+        end = int(insns[-1]["addr"]) + int(insns[-1].get("size") or 1)
+        splits = {begin}
+        for insn in insns:
+            head = int(insn["addr"])
+            jump = _int_or_none(insn.get("jump"))
+            if jump is not None and begin <= jump < end and jump in by_addr:
+                splits.add(jump)
+            nxt = head + int(insn.get("size") or 0)
+            itype = insn.get("type") or ""
+            if itype in _STOP_FLOW_TYPES or itype == "cjmp":
+                if begin < nxt < end and nxt in by_addr:
+                    splits.add(nxt)
+        points = sorted(splits)
+        blocks = []
+        for index, start in enumerate(points):
+            stop = points[index + 1] if index + 1 < len(points) else end
+            members = sorted(a for a in by_addr if start <= a < stop)
+            last = by_addr[members[-1]] if members else None
+            jump = fail = None
+            if last is not None:
+                last_t = last.get("type") or ""
+                if last_t in ("jmp", "cjmp"):
+                    jump = _int_or_none(last.get("jump"))
+                if last_t not in _STOP_FLOW_TYPES:
+                    fail = _flow_successor(last)
+            blocks.append(
+                {
+                    "addr": start,
+                    "size": stop - start,
+                    "jump": jump,
+                    "fail": fail,
+                    "ninstr": len(members),
+                    "instrs": members,
+                }
+            )
+        # Only pieces reachable from the entry belong to this funclet; the
+        # rest are adjacent thunks/funclets IDA exports as separate
+        # functions.  They become gap-split candidates below.
+        piece_starts = [block["addr"] for block in blocks]
+
+        def piece_for(target: int) -> Optional[int]:
+            index = bisect.bisect_right(piece_starts, target) - 1
+            if index < 0:
+                return None
+            block = blocks[index]
+            if block["addr"] <= target < block["addr"] + block["size"]:
+                return index
+            return None
+
+        reachable = {0}
+        work = [0]
+        while work:
+            index = work.pop()
+            block = blocks[index]
+            for target in (block.get("jump"), block.get("fail")):
+                if target is None:
+                    continue
+                found = piece_for(int(target))
+                if found is not None and found not in reachable:
+                    reachable.add(found)
+                    work.append(found)
+        for index, block in enumerate(blocks):
+            if index not in reachable:
+                self._orphan_pieces.append(block)
+        blocks = [b for i, b in enumerate(blocks) if i in reachable]
+        self.synthesized.add(begin)
+        self.functions[begin] = {
+            "addr": begin,
+            "name": "sub_%x" % begin,
+            "r2_name": "",
+            "size": end - begin,
+            "ninstrs": len(insns),
+            "nbbs": len(blocks),
+            "edges": 0,
+            "indegree": 0,
+            "outdegree": 0,
+            "cc": 0,
+            "flags": "",
+            "nargs": 0,
+            "nlocals": 0,
+            "calltype": "",
+            "stackframe": 0,
+        }
+        self.func_blocks[begin] = blocks
+
+    def _split_unowned(self) -> None:
+        """Turn unowned executable code into functions.
+
+        MSVC scatters tiny leaf helpers (destructor/atexit thunks, vtable
+        methods, CRT initializers) between functions; radare2 merges them
+        into neighbors or skips them, while IDA exports each as its own
+        function.  Two sources: orphaned pieces left over when a
+        synthesized funclet's range swallowed a neighbor, and gaps between
+        covered code holding a terminal-ending instruction run.
+        """
+        for block in list(self._orphan_pieces):
+            members = [
+                self.insns[head]
+                for head in block["instrs"]
+                if head in self.insns
+            ]
+            members = [insn for insn in members if not _is_padding_insn(insn)]
+            if not members:
+                continue
+            if (members[-1].get("type") or "") not in _TERMINAL_TYPES:
+                continue
+            self._add_funclet(
+                block["addr"], block["addr"] + block["size"], members
+            )
+
+        covered = [
+            (block["addr"], block["addr"] + max(block["size"], 1))
+            for blocks in self.func_blocks.values()
+            for block in blocks
+        ]
+        covered.sort()
+        if not covered:
+            return
+        exec_ranges = (
+            [(low, high) for low, high in self.pe.exec_ranges]
+            if self.pe
+            else []
+        )
+        # Code inside a real function's extent belongs to it even when no
+        # block covers it (dead tails, alignment); IDA attributes it to the
+        # function rather than making a new one.
+        extents = sorted(
+            (ea, ea + max(int(info.get("size") or 1), 1))
+            for ea, info in self.functions.items()
+        )
+        extent_starts = [span[0] for span in extents]
+
+        def in_extent(ea: int) -> bool:
+            index = bisect.bisect_right(extent_starts, ea) - 1
+            return (
+                index >= 0
+                and extents[index][0] <= ea < extents[index][1]
+            )
+
+        gaps = []
+        cursor = min((low for low, _ in exec_ranges), default=covered[0][0])
+        for low, high in covered:
+            if low > cursor:
+                gaps.append((cursor, low))
+            cursor = max(cursor, high)
+        gaps = [
+            (low, high)
+            for low, high in gaps
+            if any(a <= low < b or a < high <= b for a, b in exec_ranges)
+            and not in_extent(low)
+            and high - low >= 3
+        ]
+        if not gaps:
+            return
+        script = ["e log.level=0"]
+        for low, high in gaps:
+            script.append("?e " + SECTION_PREFIX + "g:%x" % low)
+            script.append("s 0x%x" % low)
+            script.append("aoj %d" % min(high - low, 256))
+        raw = self._run_script(script)
+        data = _split_sections(raw)
+        for low, high in gaps:
+            decoded = []
+            for document in _parse_json_stream(data.get("g:%x" % low) or ""):
+                if isinstance(document, list):
+                    decoded.extend(document)
+            insns = sorted(
+                (
+                    insn
+                    for insn in decoded
+                    if low <= int(insn.get("addr") or 0) < high
+                    and not _is_padding_insn(insn)
+                ),
+                key=lambda insn: insn["addr"],
+            )
+            if not insns:
+                continue
+            for insn in insns:
+                self._register_instruction(insn)
+            targets = {
+                int(insn["jump"])
+                for insn in insns
+                if insn.get("jump") is not None
+                and low <= int(insn["jump"]) < high
+            }
+            run: List[dict] = []
+            previous = None
+            for insn in insns:
+                if (
+                    run
+                    and previous is not None
+                    and (previous.get("type") or "") in _TERMINAL_TYPES
+                    and int(insn["addr"]) not in targets
+                ):
+                    self._emit_gap_function(run)
+                    run = []
+                run.append(insn)
+                previous = insn
+            self._emit_gap_function(run)
+        self.sorted_func_eas = sorted(self.functions)
+        self._func_starts = list(self.sorted_func_eas)
+
+    def _is_iat_thunk(self, insn: dict) -> bool:
+        """True when ``insn`` is a lone ``jmp qword [IAT slot]`` thunk."""
+        if (insn.get("type") or "") not in _JMP_TYPES:
+            return False
+        ops = insn.get("ops") or []
+        if not ops:
+            return False
+        target = int(ops[0].get("value") or 0) or None
+        if target is None:
+            return False
+        for lo, hi in getattr(self.pe, "iat_ranges", ()):
+            if lo <= target < hi:
+                return True
+        return False
+
+    def _emit_gap_function(self, run: List[dict]) -> None:
+        """Register ``run`` as a function when it ends in a terminal."""
+        if not run:
+            return
+        if (run[-1].get("type") or "") not in _TERMINAL_TYPES:
+            return
+        if len(run) == 1 and self._is_iat_thunk(run[0]):
+            # ``jmp qword [IAT]`` entries are import thunks, not functions.
+            return
+        begin = int(run[0]["addr"])
+        end = int(run[-1]["addr"]) + int(run[-1].get("size") or 1)
+        self._add_funclet(begin, end, run)
+
+    def _recover_gap_blocks(self) -> None:
+        """Attribute referenced dead-code gaps inside functions to blocks.
+
+        radare2 leaves regions inside a function's span unassigned when only
+        an exception-continuation edge reaches them (e.g. an unwind cleanup
+        path a funclet returns into).  IDA turns every referenced address
+        into a block; do the same for decoded instructions that have an xref
+        and belong to a function's extent but to no block.
+        """
+        covered: List[Tuple[int, int]] = []
+        for blocks in self.func_blocks.values():
+            for block in blocks:
+                covered.append(
+                    (block["addr"], block["addr"] + max(block["size"], 1))
+                )
+        if not covered:
+            return
+        covered.sort()
+        starts = [span[0] for span in covered]
+
+        def is_covered(address: int) -> bool:
+            index = bisect.bisect_right(starts, address) - 1
+            return index >= 0 and covered[index][0] <= address < covered[index][1]
+
+        referenced = set(self.code_refs_to) | set(self.data_refs_to)
+        order = sorted(self.insns)
+        heads = [
+            ea for ea in order if ea in referenced and not is_covered(ea)
+        ]
+        for head in heads:
+            owner = self._function_for_address(head)
+            if owner is None:
+                continue
+            members = []
+            cursor = head
+            while cursor in self.insns and not is_covered(cursor):
+                members.append(cursor)
+                insn = self.insns[cursor]
+                if (insn.get("type") or "") in _STOP_FLOW_TYPES:
+                    break
+                index = bisect.bisect_right(order, cursor)
+                cursor = order[index] if index < len(order) else None
+            if not members:
+                continue
+            last = self.insns[members[-1]]
+            last_t = last.get("type") or ""
+            jump = fail = None
+            if last_t in ("jmp", "cjmp"):
+                jump = _int_or_none(last.get("jump"))
+            if last_t not in _STOP_FLOW_TYPES:
+                fail = _flow_successor(last)
+            block = {
+                "addr": head,
+                "size": members[-1] + int(last.get("size") or 1) - head,
+                "jump": jump,
+                "fail": fail,
+                "ninstr": len(members),
+                "instrs": members,
+            }
+            blocks = self.func_blocks.setdefault(owner, [])
+            blocks.append(block)
+            blocks.sort(key=lambda b: b["addr"])
+            # The recovered range now covers this head and its members.
+            covered.append((block["addr"], block["addr"] + block["size"]))
+            covered.sort()
+            starts = [span[0] for span in covered]
+
     def _register_instruction(self, instruction: dict) -> None:
         address = int(instruction.get("addr") or 0)
         if not address:
@@ -1134,6 +2081,23 @@ def parse_pdgx_codes(xml_text: str) -> List[int]:
                 except ValueError:
                     continue
     return codes
+
+
+def _is_padding_insn(instruction: dict) -> bool:
+    """True for filler bytes IDA never counts as instructions.
+
+    MSVC pads funclets and function tails with ``int3`` (0xcc) and ``nop``
+    (0x90); radare2 decodes them as instructions.
+    """
+    raw = instruction.get("raw_bytes")
+    if raw is None:
+        try:
+            raw = bytes.fromhex(instruction.get("bytes") or "")
+        except ValueError:
+            raw = b""
+    if raw and set(raw) <= {0x90, 0xCC}:
+        return True
+    return (instruction.get("type") or "") in ("invalid", "ill")
 
 
 def _int_or_none(value: Any) -> Optional[int]:

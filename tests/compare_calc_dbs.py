@@ -100,9 +100,12 @@ def _schema_objects(db_path):
     }
 
 
-def export_ida_db(out_db, workdir):
+def export_ida_db(out_db, workdir, binary=CALC):
     """Run the vendored exporter inside IDA in batch mode."""
     log_path = os.path.join(workdir, "ida_export.log")
+    idb_path = os.path.join(
+        workdir, os.path.splitext(os.path.basename(binary))[0] + ".i64"
+    )
     env = dict(os.environ)
     env.update(
         {
@@ -123,9 +126,9 @@ def export_ida_db(out_db, workdir):
         IDAT,
         "-A",
         f"-L{log_path}",
-        f"-o{os.path.join(workdir, 'calc.i64')}",
+        f"-o{idb_path}",
         f'-S"{IDA_EXPORT_SCRIPT}"',
-        CALC,
+        binary,
     ]
     proc = subprocess.run(
         cmd,
