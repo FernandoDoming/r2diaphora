@@ -55,7 +55,7 @@ def test_r2_binary_cache_on_calc_exe():
     cache = R2BinaryCache(CALC, load_pdb=False)
     try:
         assert cache.image_base == 0x140000000
-        assert cache.idp_name == "metapc"
+        assert cache.idp_name == "pc"  # IDA >=9 idp name for x86
         assert cache.bits == 64
         assert cache.md5sum == "18e5b970eab39020b7e53aa81c371287"
         # .pdata seeding must discover _tlgEnableCallback (0x140001010) and __wmainCRTStartup (0x1400014c0)

@@ -20,7 +20,11 @@ import traceback
 from typing import Any, Dict, Iterable, List, Optional
 
 from r2diaphora.ida_shim import state
-from r2diaphora.ida_shim.cache import capstone_operand_layout
+from r2diaphora.ida_shim.cache import (
+    capstone_operand_layout,
+    _int_or_none,
+    _STOP_FLOW_TYPES,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -263,6 +267,40 @@ def get_prev_func(ea: int) -> int:
     return cache.sorted_func_eas[index]
 
 
+_THUNK_JUMP_TYPES = {"jmp", "ujmp", "cjmp", "rjmp", "irjmp", "rcjmp", "ucjmp"}
+
+
+def _function_flags(func) -> int:
+    """Approximate IDA's ``FUNC_THUNK``: a single-instruction function that
+    jumps to another function or through an IAT slot is a thunk (e.g.
+    ``jmp qword [imp._XcptFilter]``).  ``FUNC_LIB`` requires FLIRT
+    signatures radare2 does not ship, so it is intentionally never set."""
+    cache = _cache()
+    body = [
+        cache.insns.get(ea)
+        for block in cache.func_blocks.get(func.start_ea, ())
+        for ea in block.get("instrs", ())
+    ]
+    insns = [insn for insn in body if insn is not None]
+    if len(insns) != 1:
+        return 0
+    insn = insns[0]
+    if (insn.get("type") or "") not in _THUNK_JUMP_TYPES:
+        return 0
+    # IDA only sets FUNC_THUNK for jumps through an import (IAT) slot; a
+    # direct ``jmp <func>`` gets a ``$thunk$`` name but stays exported.
+    ops = insn.get("ops") or []
+    if not ops:
+        return 0
+    target = int(ops[0].get("value") or 0) or None
+    if target is None:
+        return 0
+    for lo, hi in getattr(cache.pe, "iat_ranges", ()):
+        if lo <= target < hi:
+            return FUNC_THUNK
+    return 0
+
+
 def get_func_attr(ea: Any, attr: int, default: int = -1) -> int:
     func = get_func(ea)
     if func is None:
@@ -272,7 +310,7 @@ def get_func_attr(ea: Any, attr: int, default: int = -1) -> int:
     if attr == FUNCATTR_END:
         return func.end_ea
     if attr == FUNCATTR_FLAGS:
-        return 0
+        return _function_flags(func)
     return default
 
 
@@ -334,21 +372,13 @@ def Functions(start: Optional[int] = None, end: Optional[int] = None) -> Iterabl
 def FuncItems(func_ea: Any) -> Iterable[int]:
     cache = _cache()
     start = int(func_ea)
-    func = cache.functions.get(start)
-    if func is None:
+    if start not in cache.functions:
         inner = cache.get_func_ea(start)
         if inner == BADADDR:
             return
         start = inner
-        func = cache.functions[start]
-    end = start + max(func["size"], 1)
-    index = bisect.bisect_left(cache.sorted_insn_eas, start)
-    while index < len(cache.sorted_insn_eas):
-        ea = cache.sorted_insn_eas[index]
-        if ea >= end:
-            break
-        yield ea
-        index += 1
+    for block in FlowChart(start):
+        yield from cache.instruction_heads(block.start_ea, block.end_ea)
 
 
 def Heads(start: int, end: int) -> Iterable[int]:
@@ -442,11 +472,11 @@ class Strings:
 
 
 def CodeRefsFrom(ea: Any, flow: int = 0) -> Iterable[int]:
-    return iter(_cache().get_code_refs_from(int(ea)))
+    return iter(_cache().get_code_refs_from(int(ea), int(flow)))
 
 
 def CodeRefsTo(ea: Any, flow: int = 0) -> Iterable[int]:
-    return iter(_cache().get_code_refs_to(int(ea)))
+    return iter(_cache().get_code_refs_to(int(ea), int(flow)))
 
 
 def DataRefsFrom(ea: Any) -> Iterable[int]:
@@ -510,11 +540,72 @@ def GetOperandValue(ea: Any, n: int) -> int:
     return get_operand_value(ea, n)
 
 
+# radare2 -> IDA canonical mnemonics.  IDA prints the primary Intel name for
+# conditional instructions (jz/jnb/cmovz/setz...) while radare2 often emits an
+# alias (je/jae/cmove/sete...); normalizing keeps the mnemonics list, the
+# small-primes product and the instructions table identical to IDA's.
+_CONDITION_CODE_CANONICAL = {
+    "e": "z",
+    "ne": "nz",
+    "ae": "nb",
+    "be": "be",
+    "a": "a",
+    "b": "b",
+    "s": "s",
+    "ns": "ns",
+    "p": "p",
+    "np": "np",
+    "pe": "p",
+    "po": "np",
+    "l": "l",
+    "ge": "ge",
+    "le": "le",
+    "g": "g",
+    "o": "o",
+    "no": "no",
+    "nbe": "a",
+    "na": "be",
+    "nge": "l",
+    "nl": "ge",
+    "nle": "g",
+    "ng": "le",
+    "c": "b",
+    "nc": "nb",
+    "nae": "b",
+}
+
+_MNEMONIC_CANONICAL = {
+    "ret": "retn",
+    "movabs": "mov",
+    "sal": "shl",
+    "wait": "fwait",
+    "xlatb": "xlat",
+}
+
+
+def canonical_mnemonic(mnemonic: str) -> str:
+    """Translate a radare2 mnemonic to IDA's canonical spelling."""
+    if not mnemonic:
+        return mnemonic
+    direct = _MNEMONIC_CANONICAL.get(mnemonic)
+    if direct is not None:
+        return direct
+    for prefix in ("cmov", "set", "loop", "j"):
+        if mnemonic.startswith(prefix):
+            suffix = mnemonic[len(prefix) :]
+            canonical = _CONDITION_CODE_CANONICAL.get(suffix)
+            if canonical is not None:
+                return prefix + canonical
+            break
+    return mnemonic
+
+
 def print_insn_mnem(ea: Any) -> str:
     cached = _cache().get_insn(int(ea))
     if not cached:
         return ""
-    return cached.get("mnemonic") or (cached.get("disasm") or "").split(" ")[0]
+    mnemonic = cached.get("mnemonic") or (cached.get("disasm") or "").split(" ")[0]
+    return canonical_mnemonic(mnemonic)
 
 
 def GetMnem(ea: Any) -> str:
@@ -630,8 +721,9 @@ def get_root_filename() -> str:
     return os.path.basename(_cache().input_path)
 
 
-def GetInputFileMD5() -> str:
-    return _cache().md5sum
+def GetInputFileMD5() -> bytes:
+    """Like IDA's GetInputFileMD5: the raw 16-byte digest, not hex text."""
+    return bytes.fromhex(_cache().md5sum)
 
 
 def get_fileregion_offset(ea: Any) -> int:
@@ -761,6 +853,9 @@ def get_str_type(ea: Any) -> int:
 def get_max_strlit_length(ea: Any, strtype: int = STRTYPE_C) -> int:
     entry = _string_entry(int(ea))
     if entry is None:
+        if strtype in (STRTYPE_C, -1):
+            data = _literal_bytes(int(ea))
+            return len(data) + 1 if data else 0
         return 0
     if strtype == STRTYPE_C_16 and get_str_type(ea) != STRTYPE_C_16:
         return 0
@@ -769,11 +864,41 @@ def get_max_strlit_length(ea: Any, strtype: int = STRTYPE_C) -> int:
     return len(_string_bytes(entry, strtype)) + 1
 
 
+_STRLIT_CHARS = frozenset(list(range(0x20, 0x7F)) + [0x09, 0x0A, 0x0B, 0x0C, 0x0D])
+
+
+def _literal_bytes(ea: int) -> Optional[bytes]:
+    """Best-effort emulation of IDA's ``get_strlit_contents`` on a mapped
+    address that is not a defined string: it scans the raw bytes and returns
+    the leading run of C-string characters (printable plus the usual escape
+    whitespace), or ``None`` when the first byte cannot start a literal or
+    the item looks like an offset into the image.
+    """
+    cache = _cache()
+    if not cache.is_mapped(ea):
+        return None
+    raw = cache.get_bytes(ea, 64)
+    if len(raw) >= 4 and (
+        cache.is_mapped(int.from_bytes(raw[:4], "little"))
+        or cache.is_mapped(int.from_bytes(raw[:8], "little"))
+    ):
+        return None
+    out = bytearray()
+    for byte in raw:
+        if byte not in _STRLIT_CHARS:
+            break
+        out.append(byte)
+    return bytes(out) if out else None
+
+
 def get_strlit_contents(ea: Any, length: int = -1, strtype: int = -1) -> Optional[bytes]:
     entry = _string_entry(int(ea))
-    if entry is None:
+    if entry is not None:
+        data = _string_bytes(entry, strtype)
+    else:
+        data = _literal_bytes(int(ea))
+    if data is None:
         return None
-    data = _string_bytes(entry, strtype)
     if length is not None and length > 0:
         data = data[: int(length)]
     return data
@@ -895,7 +1020,14 @@ def is_call_insn(ins: insn_t) -> bool:
     cached = _cache().get_insn(int(getattr(ins, "ea", BADADDR)))
     if not cached:
         return False
-    return (cached.get("type") or "") in ("call", "ucall", "icall", "rcall")
+    return (cached.get("type") or "") in (
+        "call",
+        "ucall",
+        "icall",
+        "rcall",
+        "ircall",
+        "swi",
+    )
 
 
 def get_instruction_list():
@@ -1249,6 +1381,122 @@ class BasicBlock:
         return "BasicBlock(0x%x-0x%x)" % (self.start_ea, self.end_ea)
 
 
+# radare2 instruction types whose terminating instruction makes a basic block
+# noreturn (``int 0x29``/``ud2``): IDA gives such blocks no successors.
+_NORETURN_TYPES = frozenset({"swi", "ill"})
+# radare2 instruction types for unconditional jumps out of the function.
+_JMP_OUT_TYPES = frozenset({"jmp", "ujmp", "ijmp", "rjmp", "irjmp"})
+# radare2 call mnemonics; an ``int3`` right after one marks a noreturn call.
+_CALL_TYPES = frozenset({"call", "ucall", "icall", "rcall", "ircall"})
+
+# Callee name suffixes IDA knows never return (CRT/process termination).
+_NORETURN_SUFFIXES = (
+    "_exit",
+    "exit",
+    "abort",
+    "terminate",
+    "invoke_watson",
+    "_watson",
+    "fatalappexita",
+    "fatalappexitw",
+    "fatalappexit",
+    "fatalexit",
+    "raisefailfastexception",
+    "fastfail",
+    "longjmp",
+    "longjmpex",
+    "cxxthrowexception",
+    "endthread",
+    "endthreadex",
+    "exitprocess",
+    "exitthread",
+    "rtlexituserthread",
+    "terminateprocess",
+)
+
+
+def _is_noreturn_name(name: str) -> bool:
+    """Match ``sym.imp.msvcrt.dll__exit``/``_terminate__YAXXZ``-style callee
+    names against IDA's noreturn functions."""
+    base = (name or "").lower().split("dll_")[-1].split(".")[-1].split("@")[0]
+    if not base.startswith("__"):
+        base = base.split("__")[0]
+    return any(base.endswith(suffix) for suffix in _NORETURN_SUFFIXES)
+
+
+def _noreturn_call(cache, insn: dict) -> bool:
+    if (insn.get("type") or "") not in _CALL_TYPES:
+        return False
+    target = _int_or_none(insn.get("jump")) or _int_or_none(insn.get("ptr"))
+    if target is None:
+        return False
+    return _is_noreturn_name(cache.get_name(target)) or _is_noreturn_name(
+        cache.get_true_name(target)
+    )
+
+
+def _tail_instruction(cache, start: int, end: int) -> Optional[dict]:
+    """Last non-padding instruction of a basic block (int3 filler skipped)."""
+    for head in reversed(cache.instruction_heads(start, end)):
+        insn = cache.insns.get(head)
+        if insn is not None and insn.get("type") != "trap":
+            return insn
+    return None
+
+
+def _truncate_block_end(cache, start: int, end: int) -> int:
+    """Clip a block's end after its first flow-barrier instruction.
+
+    radare2 folds dead padding into basic blocks (``int3`` fillers after
+    ``ret``/``jmp`` and after noreturn calls); IDA stops the block at the
+    barrier, so the padding is never a ``FuncItem``.
+    """
+    heads = cache.instruction_heads(start, end)
+    for index, head in enumerate(heads):
+        insn = cache.insns.get(head)
+        if insn is None:
+            continue
+        itype = insn.get("type") or ""
+        if itype in _STOP_FLOW_TYPES:
+            return head + int(insn.get("size") or 0)
+        if itype in _CALL_TYPES and index + 1 < len(heads):
+            nxt = cache.insns.get(heads[index + 1])
+            if nxt is not None and (nxt.get("type") or "") == "trap":
+                return head + int(insn.get("size") or 0)
+    return end
+
+
+def _executable_ea(cache, ea: int) -> bool:
+    segment = cache.get_segment_for(ea)
+    return segment is not None and "x" in segment.get("perm", "")
+
+
+def _split_blocks(raw_blocks: List[dict], split_points: set) -> List[dict]:
+    """Split raw agfj blocks at SEH scope boundaries, like IDA's FlowChart."""
+    out = []
+    for block in sorted(raw_blocks, key=lambda item: item["addr"]):
+        start = int(block["addr"])
+        cuts = sorted(
+            point
+            for point in split_points
+            if start < point < start + max(int(block["size"]), 0)
+        )
+        cursor = start
+        for cut in cuts:
+            piece = dict(block)
+            piece["addr"] = cursor
+            piece["size"] = cut - cursor
+            piece["jump"] = None
+            piece["fail"] = cut
+            out.append(piece)
+            cursor = cut
+        tail = dict(block)
+        tail["addr"] = cursor
+        tail["size"] = start + int(block["size"]) - cursor
+        out.append(tail)
+    return out
+
+
 def FlowChart(func) -> List[BasicBlock]:
     cache = _cache()
     start = getattr(func, "start_ea", func)
@@ -1270,26 +1518,101 @@ def FlowChart(func) -> List[BasicBlock]:
                 "ninstr": info["ninstrs"],
             }
         ]
+    else:
+        raw_blocks = [dict(block) for block in raw_blocks]
+
+    # IDA models SEH try scopes and funclets in the flow graph; radare2's
+    # ``afbj`` does not.  Reproduce IDA's shape from the ``try.*`` flags the
+    # cache recovered from PE exception data: try-region starts and filter
+    # entries are block boundaries, and the block that starts a try region
+    # gains an edge to the filter funclet (catch blocks stay orphaned, as IDA).
+    regions = cache.try_regions.get(start) or {}
+    if regions:
+        split_points = set()
+        for region in regions.values():
+            for key in ("from", "filter"):
+                ea = region.get(key)
+                if ea:
+                    split_points.add(ea)
+        raw_blocks = _split_blocks(raw_blocks, split_points)
+
+    for raw in raw_blocks:
+        block_start = int(raw["addr"])
+        tail = _tail_instruction(cache, block_start, block_start + int(raw["size"]))
+        if tail is not None and (
+            (tail.get("type") or "") in _NORETURN_TYPES
+            or _noreturn_call(cache, tail)
+        ):
+            raw["jump"] = None
+            raw["fail"] = None
+            raw["noreturn"] = True
 
     blocks: List[BasicBlock] = []
     by_addr: Dict[int, BasicBlock] = {}
     for index, block in enumerate(raw_blocks):
         block_start = int(block["addr"])
-        block_end = block_start + max(int(block["size"]), 1)
+        block_end = _truncate_block_end(
+            cache, block_start, block_start + max(int(block["size"]), 1)
+        )
         block_obj = BasicBlock(index, block_start, block_end)
         blocks.append(block_obj)
         by_addr[block_start] = block_obj
 
-    for block, raw in zip(blocks, raw_blocks):
-        for key in ("jump", "fail"):
-            target = raw.get(key)
-            if target is None:
-                continue
-            target_block = by_addr.get(int(target))
-            if target_block is not None and target_block is not block:
-                block._succs.append(target_block)
-                target_block._preds.append(block)
+    pseudos: Dict[int, BasicBlock] = {}
 
+    def _link(source: BasicBlock, target: Optional[int]) -> None:
+        if target is None:
+            return
+        target = int(target)
+        target_block = by_addr.get(target)
+        if target_block is None:
+            # A flow successor outside the function's blocks is an external
+            # node in IDA's chart: a zero-width block that owns no instructions.
+            target_block = pseudos.get(target)
+            if target_block is None:
+                target_block = BasicBlock(len(blocks) + len(pseudos), target, target)
+                pseudos[target] = target_block
+        if target_block is not source and target_block not in source._succs:
+            source._succs.append(target_block)
+            target_block._preds.append(source)
+
+    extra_edges: Dict[int, List[int]] = {}
+    for region in regions.values():
+        if region.get("from") and region.get("filter"):
+            extra_edges.setdefault(region["from"], []).append(region["filter"])
+
+    for block, raw in zip(blocks, raw_blocks):
+        for key in ("fail", "jump"):
+            _link(block, raw.get(key))
+        for target in extra_edges.get(int(raw["addr"]), ()):
+            _link(block, target)
+        if raw.get("jump") is None and raw.get("fail") is None and not raw.get("noreturn"):
+            tail = _tail_instruction(
+                cache, int(raw["addr"]), int(raw["addr"]) + int(raw["size"])
+            )
+            if tail is not None and (tail.get("type") or "") in _JMP_OUT_TYPES:
+                target = _int_or_none(tail.get("jump"))
+                if target is None:
+                    pointer = _int_or_none(tail.get("ptr"))
+                    if pointer is not None:
+                        width = max(cache.bits // 8, 4)
+                        raw_ptr = cache.get_bytes(pointer, width)
+                        if raw_ptr:
+                            resolved = int.from_bytes(raw_ptr, "little")
+                            if _executable_ea(cache, resolved):
+                                target = resolved
+                elif not _executable_ea(cache, target):
+                    target = None
+                _link(block, target)
+
+    # IDA orders each block's edge lists by the successor's position in the
+    # chart (creation order), so a backward branch precedes the fallthrough.
+    for block in blocks + list(pseudos.values()):
+        block._succs.sort(key=lambda succ: succ.id)
+        block._preds.sort(key=lambda pred: pred.id)
+
+    if pseudos:
+        blocks.extend(pseudos.values())
     return blocks
 
 # ---------------------------------------------------------------------------

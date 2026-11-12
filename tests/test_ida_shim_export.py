@@ -38,8 +38,11 @@ def test_unmodified_diaphora_ida_exports_calc_exe():
                 ver = conn.execute("select value from version").fetchone()["value"]
                 assert ver == "3.4"
                 prog = conn.execute("select * from program").fetchone()
-                assert prog["processor"] == "metapc64"
-                assert prog["md5sum"] == "18e5b970eab39020b7e53aa81c371287"
+                # IDA >=9 reports "pc64"; md5sum is the raw 16-byte digest.
+                assert prog["processor"] == "pc64"
+                assert prog["md5sum"] == bytes.fromhex(
+                    "18e5b970eab39020b7e53aa81c371287"
+                )
 
                 funcs = conn.execute("select * from functions").fetchall()
                 assert len(funcs) >= 15

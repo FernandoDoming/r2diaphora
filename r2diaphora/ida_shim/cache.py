@@ -53,6 +53,23 @@ _FLOW_INSTRUCTION_TYPES = frozenset(
     }
 )
 
+# radare2 instruction types that do not pass control flow to the next
+# instruction (used to emulate IDA's ``flow`` flag on code references).
+_STOP_FLOW_TYPES = frozenset(
+    {
+        "jmp",
+        "ujmp",
+        "ijmp",
+        "rjmp",
+        "ret",
+        "hlt",
+        "ill",
+        "invalid",
+        "trap",
+        "int3",
+    }
+)
+
 OFFSET_OPERAND_TYPES = (O_MEM, O_IMM, O_FAR, O_NEAR, O_DISPL)
 
 _NAME_PREFIXES = ("sym.imp.", "sym.", "imp.")
@@ -88,9 +105,17 @@ def find_r2_binary(name: str = "radare2") -> Optional[str]:
 class PEInfo:
     """Minimal PE parser: image base, sections and the executable ranges."""
 
-    def __init__(self, image_base: int, sections: List[dict]):
+    def __init__(
+        self,
+        image_base: int,
+        sections: List[dict],
+        uninit_ranges: Optional[List[Tuple[int, int]]] = None,
+        iat_ranges: Optional[List[Tuple[int, int]]] = None,
+    ):
         self.image_base = image_base
         self.sections = sections
+        self.uninit_ranges = uninit_ranges or []
+        self.iat_ranges = iat_ranges or []
 
     @property
     def exec_ranges(self) -> List[Tuple[int, int]]:
@@ -152,9 +177,28 @@ def parse_pe(path: str) -> Optional[PEInfo]:
                     "exec": bool(characteristics & 0x20000000),
                 }
             )
+        # Ranges IDA treats as uninitialized: the IAT directory (the loader
+        # overwrites it at load time) and BSS tails past each section's raw
+        # data. Reads there return nothing, like IDA's 0xFF-filled bytes.
+        uninit: List[Tuple[int, int]] = []
+        iat: List[Tuple[int, int]] = []
+        dd_base = opt + (112 if magic == 0x20B else 96)
+        if dd_base + 13 * 8 <= len(data):
+            iat_rva, iat_size = struct.unpack_from("<II", data, dd_base + 12 * 8)
+            if iat_rva and iat_size:
+                iat.append((image_base + iat_rva, image_base + iat_rva + iat_size))
+                uninit.extend(iat)
+        for section in sections:
+            if section["vsize"] > section["size"]:
+                uninit.append(
+                    (
+                        section["vaddr"] + section["size"],
+                        section["vaddr"] + section["vsize"],
+                    )
+                )
     except (struct.error, IndexError):
         return None
-    return PEInfo(image_base, sections)
+    return PEInfo(image_base, sections, uninit, iat)
 
 
 def parse_pdata_entries(
@@ -309,7 +353,7 @@ class R2BinaryCache:
         self.image_base = self.pe.image_base if self.pe else 0
         self.bits = 64 if self.image_base > 0xFFFFFFFF else 32
         self.arch = "x86"
-        self.idp_name = "metapc"
+        self.idp_name = "pc"
         self.min_ea = 0
         self.max_ea = 0
         self.md5sum = self._file_md5()
@@ -325,9 +369,11 @@ class R2BinaryCache:
         self.code_refs_to: Dict[int, List[int]] = {}
         self.data_refs_from: Dict[int, List[int]] = {}
         self.data_refs_to: Dict[int, List[int]] = {}
+        self.try_regions: Dict[int, Dict[int, Dict[str, int]]] = {}
         self.switches_by_insn: Dict[int, Tuple[int, List[int]]] = {}
         self.segments: List[dict] = []
         self.sorted_insn_eas: List[int] = []
+        self.insn_ends: Dict[int, int] = {}
 
         self._segments_bytes: List[Tuple[int, bytes]] = []
         self._pe_section_bytes: Dict[str, bytes] = {}
@@ -345,6 +391,7 @@ class R2BinaryCache:
         self._segments_bytes = []
         self._pe_section_bytes = {}
         self.insns = {}
+        self.insn_ends = {}
 
     def ensure_function_cached(self, func_ea: int) -> dict:
         func = self.functions.get(func_ea)
@@ -364,6 +411,9 @@ class R2BinaryCache:
     def _pe_bytes(self, ea: int, size: int) -> bytes:
         if self.pe is None or not self._pe_section_bytes:
             return b""
+        for start, end in self.pe.uninit_ranges:
+            if ea < end and ea + size > start:
+                return b""
         section = self.get_segment_for(ea)
         if section is None:
             return b""
@@ -428,11 +478,23 @@ class R2BinaryCache:
             break
         return 0xFFFFFFFFFFFFFFFF
 
-    def get_code_refs_from(self, ea: int) -> List[int]:
-        return self.code_refs_from.get(ea, [])
+    def get_code_refs_from(self, ea: int, flow: int = 0) -> List[int]:
+        refs = list(self.code_refs_from.get(ea, []))
+        if flow:
+            successor = _flow_successor(self.insns.get(ea))
+            if successor is not None and successor not in refs:
+                refs.append(successor)
+        return refs
 
-    def get_code_refs_to(self, ea: int) -> List[int]:
-        return self.code_refs_to.get(ea, [])
+    def get_code_refs_to(self, ea: int, flow: int = 0) -> List[int]:
+        refs = list(self.code_refs_to.get(ea, []))
+        if flow:
+            predecessor_ea = self.insn_ends.get(ea)
+            if predecessor_ea is not None and predecessor_ea not in refs:
+                predecessor = self.insns.get(predecessor_ea)
+                if _flow_successor(predecessor) == ea:
+                    refs.append(predecessor_ea)
+        return refs
 
     def get_data_refs_from(self, ea: int) -> List[int]:
         return self.data_refs_from.get(ea, [])
@@ -664,7 +726,8 @@ class R2BinaryCache:
         if binary.get("baddr") is not None:
             self.image_base = int(binary["baddr"])
         if arch in ("x86", "x86_64", "amd64", "i386"):
-            self.idp_name = "metapc"
+            # IDA 9.x reports "pc" (-> "pc64"); <=8.x reported "metapc".
+            self.idp_name = "pc"
         elif arch.startswith("arm"):
             self.idp_name = "arm"
         else:
@@ -790,6 +853,7 @@ class R2BinaryCache:
             self.comments_by_ea[address] = entry.get("name", "")
 
     def _parse_flags(self, flags: Optional[List[dict]]) -> None:
+        try_re = re.compile(r"^try\.(\d+)\.([0-9a-fA-F]+)\.(\w+)$")
         for entry in flags or []:
             address = entry.get("offset")
             if address is None:
@@ -803,6 +867,17 @@ class R2BinaryCache:
             name = entry.get("name") or ""
             if not name:
                 continue
+            # ``try.N.<func>.{from,to,filter,catch}`` flags carry the structured
+            # exception-handling ranges radare2 recovered from PE .pdata.  IDA
+            # models these as basic-block boundaries plus an edge to the filter
+            # funclet, so keep them for FlowChart instead of using them as names.
+            match = try_re.match(name)
+            if match is not None:
+                region_index = int(match.group(1))
+                func_ea = int(match.group(2), 16)
+                regions = self.try_regions.setdefault(func_ea, {})
+                regions.setdefault(region_index, {})[match.group(3)] = address
+                continue
             normalized = _normalize_name(name)
             if not normalized:
                 continue
@@ -811,6 +886,10 @@ class R2BinaryCache:
                 continue
             self.names[address] = (normalized, name, None)
 
+    def _is_executable(self, ea: int) -> bool:
+        segment = self.get_segment_for(ea)
+        return segment is not None and "x" in segment.get("perm", "")
+
     def _parse_callgraph(self, callgraph_stream: List[Any]) -> None:
         for entry in callgraph_stream:
             for edge in entry or []:
@@ -818,13 +897,23 @@ class R2BinaryCache:
                 target = _int_or_none(edge.get("to"))
                 if source is None or target is None:
                     continue
-                refs = self.code_refs_from.setdefault(source, [])
-                if target not in refs:
-                    refs.append(target)
-                back = self.code_refs_to.setdefault(target, [])
-                if source not in back:
-                    back.append(source)
-                if edge.get("type") not in ("CALL", "CODE", "JMP", "UJMP", "CJMP"):
+                # IDA xref semantics: a CALL is a code reference even when it
+                # points at an import pointer (IDA resolves the callee), while
+                # JMP/CODE edges landing on data (e.g. an indirect jump through
+                # an import slot) are data references, not code.
+                edge_type = edge.get("type")
+                is_code = edge_type == "CALL" or (
+                    edge_type in ("CODE", "JMP", "UJMP", "CJMP")
+                    and self._is_executable(target)
+                )
+                if is_code:
+                    refs = self.code_refs_from.setdefault(source, [])
+                    if target not in refs:
+                        refs.append(target)
+                    back = self.code_refs_to.setdefault(target, [])
+                    if source not in back:
+                        back.append(source)
+                else:
                     data = self.data_refs_from.setdefault(source, [])
                     if target not in data:
                         data.append(target)
@@ -928,6 +1017,7 @@ class R2BinaryCache:
                     "value": value,
                     "addr": value if operand_type in OFFSET_OPERAND_TYPES else 0,
                     "reg": operand.get("base"),
+                    "seg": operand.get("segment"),
                     "size": int(operand.get("size") or 0),
                 }
             )
@@ -944,13 +1034,53 @@ class R2BinaryCache:
         instruction["decoded_size"] = min(decoded_size, max(size, 1))
         self.insns[address] = instruction
 
-        for ref in _flow_targets(instruction):
+        jump = _int_or_none(instruction.get("jump"))
+        if jump:
             refs = self.code_refs_from.setdefault(address, [])
-            if ref not in refs:
-                refs.append(ref)
-            back = self.code_refs_to.setdefault(ref, [])
+            if jump not in refs:
+                refs.append(jump)
+            back = self.code_refs_to.setdefault(jump, [])
             if address not in back:
                 back.append(address)
+        if address + size:
+            self.insn_ends[address + size] = address
+
+        # Emulate IDA's data references: radare2 only reports explicit xref
+        # edges, while IDA also marks memory operands with a computable target
+        # (``lea reg, [rip+x]``, ``call qword [imp]``) as data references.
+        # Stack-variable accesses would only be data references for the stack
+        # slots IDA promotes to named variables, which is not reproducible
+        # here, so they are intentionally left out.
+        data_targets: List[int] = []
+        for operand in operands:
+            if operand["type"] not in (O_MEM, O_DISPL, O_PHRASE):
+                continue
+            base = (operand.get("reg") or "").lower()
+            if (operand.get("seg") or "") in ("gs", "fs", "cs", "ds", "es", "ss"):
+                continue
+            if base in ("rip", "eip") or (not base and operand["addr"]):
+                data_targets.append(operand["addr"])
+        insn_type = instruction.get("type") or ""
+        pointer = _int_or_none(instruction.get("ptr"))
+        if insn_type in ("irjmp", "ujmp", "ijmp", "rjmp") and pointer is not None:
+            # ``jmp qword [slot]``: IDA's code reference goes to the slot's
+            # contents when they resolve to code; the slot itself stays a
+            # data reference (already covered by afxj edges).
+            raw_ptr = self.get_bytes(pointer, max(self.bits // 8, 4))
+            if raw_ptr:
+                resolved = int.from_bytes(raw_ptr, "little")
+                if self._is_executable(resolved):
+                    refs = self.code_refs_from.setdefault(address, [])
+                    if resolved not in refs:
+                        refs.append(resolved)
+                    back = self.code_refs_to.setdefault(resolved, [])
+                    if address not in back:
+                        back.append(address)
+        if data_targets:
+            refs = self.data_refs_from.setdefault(address, [])
+            for target in data_targets:
+                if target not in refs:
+                    refs.append(target)
 
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
@@ -1050,16 +1180,32 @@ def _guess_ida_type(operand: dict) -> int:
 
 
 def _operand_value(operand: dict, instruction: dict, bits: int) -> int:
+    mask = (1 << bits) - 1
     kind = operand.get("type")
     if kind == "imm":
-        return int(operand.get("value") or 0)
+        value = int(operand.get("value") or 0)
+        if value < 0:
+            return value & mask
+        size = int(operand.get("size") or 0)
+        # IDA sign-extends immediates narrower than the word size, e.g. an
+        # imm32 of 0xC0000409 is reported as 0xFFFFFFFFC0000409 on x86-64.
+        if 0 < size < max(bits // 8, 1) and value >= (1 << (size * 8 - 1)):
+            return value | (mask ^ ((1 << (size * 8)) - 1))
+        return value
     if kind == "mem":
         base = operand.get("base")
         disp = int(operand.get("disp") or 0)
-        if base in ("rip", "pc") or not base:
+        if base in ("rip", "pc"):
             return int(instruction.get("addr") or 0) + int(
                 instruction.get("size") or 0
             ) + disp
+        if not base:
+            return disp & mask
+        # Register-based displacement: disp is a signed 32-bit value.
+        if disp < 0:
+            return disp & mask
+        if 0x80000000 <= disp <= 0xFFFFFFFF:
+            return disp | (mask & ~0xFFFFFFFF)
         return disp
     return -1
 
@@ -1071,10 +1217,21 @@ def _operand_address(operand: dict, instruction: dict, bits: int) -> int:
     return _operand_value(operand, instruction, bits)
 
 
-def _flow_targets(instruction: dict) -> List[int]:
-    targets = []
-    for key in ("jump", "fail"):
-        value = _int_or_none(instruction.get(key))
-        if value:
-            targets.append(value)
-    return targets
+def _flow_successor(instruction: Optional[dict]) -> Optional[int]:
+    """Return the fall-through target of ``instruction`` or ``None``.
+
+    Mirrors IDA's notion of an instruction "passing flow": radare2 reports it
+    explicitly through the ``fail`` key for branch instructions, while regular
+    instructions implicitly flow to ``addr + size``.
+    """
+    if not instruction:
+        return None
+    fail = _int_or_none(instruction.get("fail"))
+    if fail:
+        return fail
+    if (instruction.get("type") or "") in _STOP_FLOW_TYPES:
+        return None
+    size = int(instruction.get("size") or 0)
+    if size <= 0:
+        return None
+    return int(instruction.get("addr") or 0) + size
