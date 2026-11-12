@@ -286,6 +286,7 @@ class R2BinaryCache:
         ident_libs: bool = True,
         decompiler_cmd: str = "pdg",
         chunk_size: int = DEFAULT_CHUNK_SIZE,
+        timeout: int = 3600,
     ):
         self.input_path = os.path.abspath(input_path)
         if not os.path.isfile(self.input_path):
@@ -301,6 +302,7 @@ class R2BinaryCache:
         self.ident_libs = ident_libs
         self.decompiler_cmd = decompiler_cmd
         self.chunk_size = max(1, chunk_size)
+        self.timeout = max(1, int(timeout))
         self.cmd_count = 0
 
         self.pe = parse_pe(self.input_path)
@@ -452,6 +454,25 @@ class R2BinaryCache:
             ea += max(insn["size"], 1)
         return heads
 
+    def prune_functions(self, predicate) -> None:
+        """Drop functions for which ``predicate(info)`` is false.
+
+        Used by the CLI's ``-nbbs`` / ``-a`` filters: everything downstream
+        (``Functions()``, decompilation batches, export) then sees only the
+        selected functions.
+        """
+        keep = {
+            ea: info for ea, info in self.functions.items() if predicate(info)
+        }
+        removed = set(self.functions) - set(keep)
+        self.functions = keep
+        self.sorted_func_eas = sorted(keep)
+        self._func_starts = list(self.sorted_func_eas)
+        for ea in removed:
+            self.func_blocks.pop(ea, None)
+            self.decompiled.pop(ea, None)
+            self.names.pop(ea, None)
+
     # -- decompiler ---------------------------------------------------------
 
     def decompile_all(self, func_eas: Optional[List[int]] = None) -> None:
@@ -528,7 +549,7 @@ class R2BinaryCache:
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                timeout=3600,
+                timeout=self.timeout,
             )
             return completed.stdout.decode("utf-8", "replace")
         finally:

@@ -1,38 +1,76 @@
 # r2diaphora
 
-r2diaphora is a port of [Diaphora](https://github.com/joxeankoret/diaphora) to [radare2](https://github.com/radareorg/radare2) and MariaDB. It also uses [r2ghidra](https://github.com/radareorg/r2ghidra) as decompiler by default, with support for other decompilers such as `pdc`.
+r2diaphora is a port of [Diaphora](https://github.com/joxeankoret/diaphora) 3.5 to
+[radare2](https://github.com/radareorg/radare2). It uses
+[r2ghidra](https://github.com/radareorg/r2ghidra) as decompiler by default, with
+support for `pdc` and for no decompiler at all.
 
 ## What is diaphora?
 
 Quoting from the original repository:
 
-> Diaphora (διαφορά, Greek for 'difference') version 2.0 is the most advanced program diffing tool, working as an IDA plugin, available as of today (2019). It was released first during SyScan 2015 and is actively maintained.
+> Diaphora (διαφορά, Greek for 'difference') is the most advanced program diffing
+> tool, working as an IDA plugin (...). It was released first during SyScan 2015
+> and is actively maintained.
+
+## How it works
+
+Diaphora 3.5 itself is vendored **unmodified** under `r2diaphora/upstream/`. A
+translation layer (`r2diaphora/ida_shim/`) implements the subset of the IDAPython
+API that Diaphora uses on top of a single bulk radare2 analysis, so upstream code
+keeps working as-is and future Diaphora releases only need to be re-vendored.
+
+Exported databases use **SQLite by default** (`~/.r2diaphora/dbs/<sha256>.sqlite`)
+and are byte-compatible in schema with the ones produced by Diaphora inside IDA.
+MariaDB is still supported with `--db-backend mariadb`.
 
 ## Setup
 
-0. r2diaphora requires radare2 to be installed in the local machine and a valid connection to a MariaDB server. If you don't have either of those refer to the respective software manual on how to install them.
-1. Install it with `pip install r2diaphora`
-2. Run `r2diaphora-db config -u <user> -p <password> -hs <host>` to fill database credentials
-3. (Optional) Install r2ghidra with `r2pm -ci r2ghidra`. Optionally you can use `pdc` (`-d pdc`) or no decompiler at all (`-nd`)
+0. r2diaphora requires radare2 (with r2ghidra for decompilation). Install radare2
+   and add its `bin` directory to `PATH`.
+1. Install it with `pip install r2diaphora` (or `pip install -e .` from a checkout).
+2. (Optional) Install r2ghidra with `r2pm -ci r2ghidra`. You can also use `pdc`
+   (`-d pdc`) or no decompiler at all (`-nd`).
+3. (Optional, MariaDB only) Run
+   `r2diaphora-db config -u <user> -p <password> -hs <host>
+   --backend mariadb`.
 
 ## Usage
 
 ```
-usage: r2diaphora [-h] [-f] [-nbbs NBBS] [-o O] [-d {pdc,ghidra}] [-nd] [-a] file1 [file2]
+usage: r2diaphora [-h] [-f] [-nbbs NBBS] [-o O] [-d {ghidra,pdc}] [-nd] [-a]
+                  [-t TIMEOUT] [--pdb] [--db-backend {mariadb,sqlite}]
+                  [--db-dir DB_DIR] file1 [file2]
 
 positional arguments:
-  file1                 File to analyze
-  file2                 (Optional) File to diff against
+  file1                 Binary or exported .sqlite database to analyze
+  file2                 (Optional) file or database to diff against
 
-optional arguments:
+options:
   -h, --help            show this help message and exit
   -f                    Force DB override
-  -nbbs NBBS            Functions with a number of basic blocks below this number are excluded from analysis
-  -o O                  Diff output file (HTML) - Default value: <db1name>_vs_<db2name>.html
-  -d {pdc,ghidra}, --decompiler {pdc,ghidra}
-                        Which decompiler to use
+  -nbbs NBBS            Exclude functions with fewer than this number of basic blocks
+  -o O                  HTML output file (default: <db1>_vs_<db2>.html)
+  -d, --decompiler {ghidra,pdc}
+                        Decompiler to use for the export
   -nd, --no-decompiler  Do not use the decompiler
-  -a                    Analyze ALL functions (by default library functions are skipped)
+  -a                    Analyze ALL functions (library functions included)
+  -t, --timeout TIMEOUT
+                        Timeout, in seconds, for each radare2 invocation
+  --pdb                 Let radare2 load PDB symbols, when available
+  --db-backend {mariadb,sqlite}
+                        Database backend to use (default: sqlite)
+  --db-dir DB_DIR       Directory holding SQLite databases
+                        (default: ~/.r2diaphora/dbs)
+```
+
+```python
+from r2diaphora import generate_db_for_file, compare_dbs, HtmlResults
+
+db1 = generate_db_for_file("original.exe")
+db2 = generate_db_for_file("patched.exe")
+matches = compare_dbs(db1, db2)
+HtmlResults(matches, file1="original.exe", file2="patched.exe", db1=db1, db2=db2).render("diff.html")
 ```
 
 ```
@@ -43,17 +81,19 @@ positional arguments:
     clean         delete analysis databases
     config        configure credentials for the MariaDB server
 
-optional arguments:
+options:
   -h, --help      show this help message and exit
 ```
 
 ```
-usage: r2diaphora-bulk [-h] [-f] [-a] files [files ...]
+usage: r2diaphora-bulk [-h] [-f] [-a] [-nbbs NBBS] [-d {ghidra,pdc}] [-nd]
+                       [-t TIMEOUT] [--pdb] [--db-backend {mariadb,sqlite}]
+                       [--db-dir DB_DIR] files [files ...]
 
 positional arguments:
   files       Files to analyze
 
-optional arguments:
+options:
   -h, --help  show this help message and exit
   -f          Force DB override
   -a          Analyze ALL functions (by default library functions are skipped)

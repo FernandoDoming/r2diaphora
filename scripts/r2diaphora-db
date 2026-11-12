@@ -1,39 +1,37 @@
 #!/usr/bin/env python3
+"""Manage r2diaphora databases and MariaDB credentials."""
 
+import argparse
+import json
 import os
 import sys
-import json
-import argparse
+
 import r2diaphora
+
 
 def clean(args):
     if args.name:
         r2diaphora.drop_db(args.name)
     elif args.all:
-        r2diaphora.drop_all()
+        r2diaphora.drop_all(args.db_dir)
     else:
-        print(clean_parser.format_help())
+        clean_parser.print_help()
+
 
 def config(args):
-    if (not args.print and
-        not args.user and
-        not args.password and
-        not args.host
-    ):
-        print(config_parser.format_help())
+    if not any([args.print, args.user, args.password, args.host, args.backend]):
+        config_parser.print_help()
         return
 
     if args.print:
-        print(
-            json.dumps(r2diaphora.get_db_attrs())
-        )
+        print(json.dumps(r2diaphora.get_db_attrs()))
         return
 
-    if not os.path.isfile(r2diaphora.get_db_attrs_path()):
-        f = open(r2diaphora.get_db_attrs_path(), "w")
-        f.write("{}")
-        f.close()
-    
+    attrs_path = r2diaphora.get_db_attrs_path()
+    if not os.path.isfile(attrs_path):
+        with open(attrs_path, "w", encoding="utf-8") as stream:
+            stream.write("{}")
+
     config = r2diaphora.get_db_attrs()
     if args.user:
         config["user"] = args.user
@@ -41,61 +39,75 @@ def config(args):
         config["password"] = args.password
     if args.host:
         config["host"] = args.host
+    if args.backend:
+        config["backend"] = args.backend
 
-    f = open(r2diaphora.get_db_attrs_path(), "w")
-    f.write(json.dumps(config))
-    f.close()
+    with open(attrs_path, "w", encoding="utf-8") as stream:
+        stream.write(json.dumps(config))
+
+
+def add_backend_options(parser):
+    parser.add_argument(
+        "-b",
+        "--db-backend",
+        dest="backend",
+        default="sqlite",
+        choices=list(r2diaphora.db_backend.BACKENDS),
+        help="database backend to use (default: sqlite)",
+    )
+    parser.add_argument(
+        "-D",
+        "--db-dir",
+        dest="db_dir",
+        default=None,
+        help="directory holding SQLite databases",
+    )
+
 
 parser = argparse.ArgumentParser()
 subparsers = parser.add_subparsers()
-clean_parser = subparsers.add_parser(
-    "clean",
-    help = "delete analysis databases"
-)
+
+clean_parser = subparsers.add_parser("clean", help="delete analysis databases")
+clean_parser.add_argument("-n", "--name", dest="name", help="database name to drop")
 clean_parser.add_argument(
-    "-n", "--name",
-    dest="name",
-    help="database name to drop"
+    "-a", "--all", dest="all", action="store_true", help="delete ALL analysis databases"
 )
-clean_parser.add_argument(
-    "-a", "--all",
-    dest="all",
-    action="store_true",
-    help="delete ALL analysis databases"
-)
+add_backend_options(clean_parser)
 clean_parser.set_defaults(func=clean)
 
 config_parser = subparsers.add_parser(
-    "config",
-    help = "configure credentials for the MariaDB server"
+    "config", help="configure credentials for the MariaDB server"
 )
 config_parser.add_argument(
-    "-l", "--list",
-    dest="print",
-    action="store_true",
-    help="print current database config"
+    "-l", "--list", dest="print", action="store_true", help="print current database config"
 )
-
 config_parser.add_argument(
-    "-u", "--user",
-    dest="user",
-    help="username to connect to the database with"
+    "-u", "--user", dest="user", help="username to connect to the database with"
 )
-
 config_parser.add_argument(
-    "-p", "--password",
-    dest="password",
-    help="password to connect to the database with"
+    "-p", "--password", dest="password", help="password to connect to the database with"
 )
-
 config_parser.add_argument(
-    "-hs", "--host",
-    dest="host",
-    help="host that acts as database server"
+    "-hs", "--host", dest="host", help="host that acts as database server"
+)
+config_parser.add_argument(
+    "--backend",
+    dest="backend",
+    choices=list(r2diaphora.db_backend.BACKENDS),
+    help="default database backend",
 )
 config_parser.set_defaults(func=config)
+
 args = parser.parse_args(sys.argv[1:])
-try:
-    args.func(args)
-except AttributeError:
-    print(parser.format_help())
+subcommand = getattr(args, "func", None)
+if subcommand is None:
+    parser.print_help()
+    sys.exit(1)
+
+if getattr(args, "db_dir", None) is not None or subcommand is clean:
+    r2diaphora.configure_db_backend(
+        getattr(args, "backend", "sqlite") or "sqlite",
+        db_dir=getattr(args, "db_dir", None),
+    )
+
+subcommand(args)

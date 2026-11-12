@@ -19,6 +19,7 @@ BACKENDS = ("sqlite", "mariadb")
 DB_ATTRS_FILE = "db.json"
 SQLITE_SUFFIXES = ("", "-wal", "-shm", "-crash")
 INDEX_TEXT_PREFIX = 255
+DEFAULT_DB_DIR = os.path.join(os.path.expanduser("~"), ".r2diaphora", "dbs")
 
 _LITERAL_RE = re.compile(r"('(?:[^']|'')*'|\"(?:[^\"]|\"\")*\")")
 _TEXT_UNIQUE_RE = re.compile(r"\b(address|rva|start_ea)\s+text\s+unique\b", re.IGNORECASE)
@@ -116,6 +117,11 @@ def escape_percent_in_literals(sql: str) -> str:
 
 def get_active_backend() -> str:
     return _state["backend"]
+
+
+def get_db_dir() -> str:
+    """Return the directory where SQLite databases are stored."""
+    return _state["db_dir"] or DEFAULT_DB_DIR
 
 
 def get_db_attrs_path() -> str:
@@ -305,6 +311,44 @@ def drop_db(dbname: str) -> None:
             close_all_connections(dbname)
         return
     remove_db_file(dbname)
+
+
+def drop_all(db_dir: Optional[str] = None) -> None:
+    """Delete every generated analysis database."""
+    close_all_connections(None)
+    if _state["backend"] == "mariadb":
+        attrs = get_db_attrs()
+        if not attrs:
+            return
+        import mysql.connector
+
+        conn = mysql.connector.connect(
+            user=attrs.get("user", ""),
+            password=attrs.get("password", ""),
+            host=attrs.get("host", "localhost"),
+        )
+        try:
+            cur = conn.cursor()
+            cur.execute("show databases")
+            names = [row[0] for row in cur.fetchall()]
+            cur.close()
+            for name in names:
+                if not name.startswith("diaphora_"):
+                    continue
+                cur = conn.cursor()
+                cur.execute(f"DROP DATABASE IF EXISTS `{name}`")
+                cur.close()
+        finally:
+            conn.close()
+        return
+
+    directory = db_dir or get_db_dir()
+    if not os.path.isdir(directory):
+        return
+    for entry in os.listdir(directory):
+        if not entry.lower().endswith(".sqlite"):
+            continue
+        remove_db_file(os.path.join(directory, entry))
 
 
 def get_function_details(dbname: str, fname: str) -> Optional[RowAdapter]:
