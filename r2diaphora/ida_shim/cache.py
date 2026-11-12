@@ -37,6 +37,22 @@ O_IMM = 5
 O_FAR = 6
 O_NEAR = 7
 
+_FLOW_INSTRUCTION_TYPES = frozenset(
+    {
+        "call",
+        "ucall",
+        "icall",
+        "rcall",
+        "jmp",
+        "ujmp",
+        "ijmp",
+        "rjmp",
+        "cjmp",
+        "ret",
+        "trap",
+    }
+)
+
 OFFSET_OPERAND_TYPES = (O_MEM, O_IMM, O_FAR, O_NEAR, O_DISPL)
 
 _NAME_PREFIXES = ("sym.imp.", "sym.", "imp.")
@@ -306,10 +322,13 @@ class R2BinaryCache:
         self.code_refs_from: Dict[int, List[int]] = {}
         self.code_refs_to: Dict[int, List[int]] = {}
         self.data_refs_from: Dict[int, List[int]] = {}
+        self.data_refs_to: Dict[int, List[int]] = {}
         self.switches_by_insn: Dict[int, Tuple[int, List[int]]] = {}
         self.segments: List[dict] = []
+        self.sorted_insn_eas: List[int] = []
 
         self._segments_bytes: List[Tuple[int, bytes]] = []
+        self._pe_section_bytes: Dict[str, bytes] = {}
         self._func_starts: List[int] = []
         self.decompiled: Dict[int, dict] = {}
         self.decompiler_available: Optional[bool] = None
@@ -322,6 +341,7 @@ class R2BinaryCache:
     def close(self) -> None:
         self._closed = True
         self._segments_bytes = []
+        self._pe_section_bytes = {}
         self.insns = {}
 
     def ensure_function_cached(self, func_ea: int) -> dict:
@@ -336,7 +356,34 @@ class R2BinaryCache:
     def get_blocks(self, func_ea: int) -> List[dict]:
         return self.func_blocks.get(func_ea, [])
 
+    def is_mapped(self, ea: int) -> bool:
+        return self.get_segment_for(ea) is not None
+
+    def _pe_bytes(self, ea: int, size: int) -> bytes:
+        if self.pe is None or not self._pe_section_bytes:
+            return b""
+        section = self.get_segment_for(ea)
+        if section is None:
+            return b""
+        raw = self._pe_section_bytes.get(section["name"])
+        if raw is None:
+            return b""
+        offset = ea - section["vaddr"]
+        if offset < 0:
+            return b""
+        chunk = raw[offset : offset + size]
+        if len(chunk) < size:
+            chunk += b"\x00" * (size - len(chunk))
+        return chunk
+
     def get_bytes(self, ea: int, size: int) -> bytes:
+        if size <= 0:
+            return b""
+        if self.pe is not None:
+            data = self._pe_bytes(ea, size)
+            if len(data) == size:
+                return data
+            return b""
         for start, data in self._segments_bytes:
             if start <= ea and ea + size <= start + len(data):
                 offset = ea - start
@@ -521,12 +568,7 @@ class R2BinaryCache:
             ("callgraph", "afxj @@f"),
         ]
         if self.pe is not None:
-            for index, section in enumerate(self.pe.sections):
-                if not section["exec"] or section["vsize"] == 0:
-                    continue
-                sections.append(
-                    ("memory%d" % index, "p8 %d @ 0x%x" % (section["vsize"], section["vaddr"]))
-                )
+            self._load_pe_section_bytes()
 
         for name, command in sections:
             script.append("?e " + SECTION_PREFIX + name)
@@ -544,11 +586,52 @@ class R2BinaryCache:
         self._parse_comments(_parse_json(data.get("comments")))
         self._parse_flags(_parse_json(data.get("flags")))
         self._parse_callgraph(_parse_json_stream(data.get("callgraph")))
-        for name in list(data):
-            if name.startswith("memory"):
-                self._parse_memory(name, data[name])
+        if self.pe is None:
+            self._load_r2_memory()
 
         self._load_instructions()
+        self.sorted_insn_eas = sorted(self.insns)
+
+    def _load_pe_section_bytes(self) -> None:
+        """Read the raw file-backed bytes of every mapped PE section.
+
+        ``get_bytes`` is on the hot path of the exporter (once per instruction),
+        so serving it from a small in-memory copy of the image is both faster
+        and more accurate than asking radare2 for hex dumps.
+        """
+        try:
+            with open(self.input_path, "rb") as handle:
+                for section in self.pe.sections:
+                    if section["size"] == 0:
+                        continue
+                    handle.seek(section["paddr"])
+                    self._pe_section_bytes[section["name"]] = handle.read(section["size"])
+        except OSError:
+            self._pe_section_bytes = {}
+
+    def _load_r2_memory(self) -> None:
+        script = ["e log.level=0"]
+        targets = []
+        for index, segment in enumerate(self.segments):
+            if "x" not in segment.get("perm", ""):
+                continue
+            if segment["vsize"] == 0:
+                continue
+            targets.append((index, segment))
+            script.append("?e " + SECTION_PREFIX + "memory%d" % index)
+            script.append("p8 %d @ 0x%x" % (segment["vsize"], segment["vaddr"]))
+        if not targets:
+            return
+        raw = self._run_script(script)
+        data = _split_sections(raw)
+        for index, segment in targets:
+            payload = (data.get("memory%d" % index) or "").strip()
+            if not payload:
+                continue
+            try:
+                self._segments_bytes.append((segment["vaddr"], bytes.fromhex(payload)))
+            except ValueError:
+                continue
 
     def _parse_info(self, info: Optional[dict]) -> None:
         if not info:
@@ -724,6 +807,9 @@ class R2BinaryCache:
                     data = self.data_refs_from.setdefault(source, [])
                     if target not in data:
                         data.append(target)
+                    back = self.data_refs_to.setdefault(target, [])
+                    if source not in back:
+                        back.append(source)
 
     def _parse_memory(self, name: str, payload: str) -> None:
         payload = payload.strip()
@@ -805,14 +891,21 @@ class R2BinaryCache:
                 {"type": _guess_ida_type(operand), "offb": 0} for operand in r2_operands
             ]
 
+        is_flow = (instruction.get("type") or "") in _FLOW_INSTRUCTION_TYPES
         for index, operand in enumerate(r2_operands):
             entry = layout[index] if index < len(layout) else {"type": O_VOID, "offb": 0}
+            operand_type = entry["type"]
+            if is_flow and operand_type == O_IMM:
+                # IDA reports branch/call targets as o_near, not o_imm; this
+                # keeps jump targets out of the constants list, like Hex-Rays.
+                operand_type = O_NEAR
+            value = _operand_value(operand, instruction, self.bits)
             operands.append(
                 {
-                    "type": entry["type"],
+                    "type": operand_type,
                     "offb": entry["offb"],
-                    "value": _operand_value(operand, instruction, self.bits),
-                    "addr": _operand_address(operand, instruction, self.bits),
+                    "value": value,
+                    "addr": value if operand_type in OFFSET_OPERAND_TYPES else 0,
                     "reg": operand.get("base"),
                     "size": int(operand.get("size") or 0),
                 }
@@ -940,21 +1033,21 @@ def _operand_value(operand: dict, instruction: dict, bits: int) -> int:
     if kind == "imm":
         return int(operand.get("value") or 0)
     if kind == "mem":
-        return int(operand.get("disp") or 0)
-    return 0
+        base = operand.get("base")
+        disp = int(operand.get("disp") or 0)
+        if base in ("rip", "pc") or not base:
+            return int(instruction.get("addr") or 0) + int(
+                instruction.get("size") or 0
+            ) + disp
+        return disp
+    return -1
 
 
 def _operand_address(operand: dict, instruction: dict, bits: int) -> int:
     kind = operand.get("type")
-    base = operand.get("base")
-    disp = int(operand.get("disp") or 0)
     if kind != "mem":
         return 0
-    if base in ("rip", "pc"):
-        return int(instruction.get("addr") or 0) + int(instruction.get("size") or 0) + disp
-    if not base:
-        return disp
-    return 0
+    return _operand_value(operand, instruction, bits)
 
 
 def _flow_targets(instruction: dict) -> List[int]:

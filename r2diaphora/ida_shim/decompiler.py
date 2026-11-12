@@ -129,7 +129,12 @@ class MockCFunc:
         self._lines = [MockLine(line) for line in lines]
         if prototype is not None:
             self._lines.insert(0, MockLine(prototype))
-        self.body = MockNode(op=EXPR_DEFS["cit_block"], kids=[])
+        # Diaphora only needs a stable tree of small integers to fold into its
+        # pseudocode hash; the ghidra p-code operation numbers are exactly that.
+        self.body = MockNode(
+            op=EXPR_DEFS["cit_block"],
+            kids=[MockNode(op=code, is_insn=True) for code in ast],
+        )
         self.ast = ast
 
     def get_pseudocode(self) -> List[MockLine]:

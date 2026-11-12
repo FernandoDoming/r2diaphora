@@ -2,8 +2,6 @@ import os
 from sys import stderr
 import time
 import logging
-import r2pipe
-import platform
 
 import subprocess
 from subprocess import Popen
@@ -11,6 +9,7 @@ import xml.etree.ElementTree as ET
 
 from r2diaphora.jkutils.factor import primesbelow as primes
 from .instructions import CPU_INSTRUCTIONS
+from r2diaphora.ida_shim.cache import R2BinaryCache
 
 LOG_FORMAT = "%(asctime)-15s [%(levelname)s] - %(message)s"
 log = logging.getLogger("diaphora.idaconv")
@@ -140,9 +139,24 @@ def no_ret_functions():
 
 _all_fns = None
 def get_all_fns(exclude_libs = False, function_filter = None):
+    """Backwards-compatible ``aflj``-shaped view of the bulk r2 cache."""
     global _all_fns
-    if not _all_fns:
-        _all_fns = log_exec_r2_cmdj("aflj")
+    if _all_fns is None:
+        cache = _require_cache()
+        fns = []
+        for ea in sorted(cache.functions):
+            info = cache.functions[ea]
+            fns.append(
+                {
+                    "offset": ea,
+                    "addr": ea,
+                    "name": info["r2_name"],
+                    "size": info["size"],
+                    "realsz": info["size"],
+                    "ninstrs": info["ninstrs"],
+                }
+            )
+        _all_fns = fns
 
     fns = _all_fns
     if exclude_libs:
@@ -190,7 +204,17 @@ def get_arch():
 
 #-----------------------------------------------------------------------
 def strings():
-    return log_exec_r2_cmdj("izj")
+    cache = _require_cache()
+    return [
+        {
+            "vaddr": ea,
+            "ea": ea,
+            "string": cache.strings_by_ea[ea].get("string", ""),
+            "length": cache.strings_by_ea[ea].get("length", 0),
+            "type": cache.strings_by_ea[ea].get("type", "ascii"),
+        }
+        for ea in sorted(cache.strings_by_ea)
+    ]
 
 def string_values(min_str_len = 1):
     r2_strs = strings()
@@ -634,44 +658,36 @@ def Names():
     return res
 
 #-----------------------------------------------------------------------
+_r2_cache = None
+
+def _require_cache():
+    if _r2_cache is None:
+        raise RuntimeError("r2_open() must be called before using the r2 shim")
+    return _r2_cache
+
 def r2_open(input_path, ident_libs = False):
-    global r2
-    r2 = r2pipe.open(f"ccall://{input_path}", flags=["-2", "-q"])
-    r2.cmd("e log.level=0")
-    r2.use_cache = True
-    r2.cmd("aaaa")
-    #r2.cmd("aac")
+    """Open ``input_path`` by building the bulk :class:`R2BinaryCache`.
 
-    # perform analysis
-    r2.cmd("e asm.flags=false")
-    r2.cmd("e asm.bytes=false")
-    r2.cmd("e scr.color=false")
-    r2.cmd("e io.cache=true")
-    #r2.cmd("aeim")
-    #r2.cmd("e anal.hasnext=true")
-
-    dll_extensions = {
-        "Darwin": "dylib",
-        "Linux": "so",
-        "Windows": "dll"
-    }
-
-    # Workaround to load the Ghidra plugins because ccall is bugged 
-    # and does not load it automatically
-    ext = dll_extensions.get(platform.system())
-    r2.cmd(f"L {os.path.expanduser('~/.local/share/radare2/plugins/core_ghidra.' + ext)}")
-    if ident_libs:
-        scan_libs()
+    The old r2pipe implementation is gone: radare2 6.x on Windows blocks on an
+    ANSI cursor-position query when driven through a pipe.  Everything the
+    public helpers need is now pre-fetched in two batched r2 invocations.
+    """
+    global _r2_cache, _all_fns, _no_ret_fns
+    if _r2_cache is not None:
+        _r2_cache.close()
+    _r2_cache = R2BinaryCache(input_path, ident_libs=ident_libs)
+    _all_fns = None
+    _no_ret_fns = None
+    return _r2_cache
 
 def r2_close():
-    global r2
-    global _all_fns
-    global _no_ret_fns
-    r2.quit()
-    r2 = None
+    global _r2_cache, _all_fns, _no_ret_fns
+    if _r2_cache is not None:
+        _r2_cache.close()
+    _r2_cache = None
     _all_fns = None
     _no_ret_fns = None
 
 def get_r2():
-    return r2
+    return _r2_cache
 
