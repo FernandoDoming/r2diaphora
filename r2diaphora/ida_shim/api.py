@@ -23,6 +23,8 @@ from r2diaphora.ida_shim import state
 from r2diaphora.ida_shim.cache import (
     capstone_operand_layout,
     _int_or_none,
+    _is_dead_pad,
+    _is_nop_insn,
     _is_padding_insn,
     _STOP_FLOW_TYPES,
 )
@@ -1602,6 +1604,16 @@ def _truncate_block_end(cache, start: int, end: int, func_end: int) -> int:
     """
     heads = cache.instruction_heads(start, end)
     limit = end
+
+    def _clip_barrier(insn: dict) -> bool:
+        return (insn.get("type") or "") in _STOP_FLOW_TYPES
+
+    def _pad_barrier(insn: dict) -> bool:
+        itype = insn.get("type") or ""
+        return itype in _STOP_FLOW_TYPES or (
+            itype in _CALL_TYPES and _noreturn_call(cache, insn)
+        )
+
     pad_start = len(heads)
     for index in range(len(heads) - 1, -1, -1):
         insn = cache.insns.get(heads[index])
@@ -1609,24 +1621,60 @@ def _truncate_block_end(cache, start: int, end: int, func_end: int) -> int:
             pad_start = index
         else:
             break
-    if pad_start < len(heads):
-        rest = cache.instruction_heads(heads[pad_start], func_end)
-        if all(
+    if 0 < pad_start < len(heads):
+        # A pad run that reaches the function's end is dead tail ``align``
+        # data.  Otherwise pads stay heads while reachable - even ``0f 1f``
+        # alignment nops - but after a flow barrier (jump, return, trap,
+        # noreturn call) only ``0x90`` heads survive: ``int3``/invalid
+        # filler and ``0f 1f`` runs become ``align`` items in IDA.
+        pad_head = heads[pad_start]
+        run = heads[pad_start:]
+        prev = cache.insns.get(heads[pad_start - 1]) or {}
+        prev_barrier = _pad_barrier(prev) or (
+            (prev.get("type") or "") in _CALL_TYPES
+            and (cache.insns.get(run[0]) or {}).get("type") == "trap"
+        )
+        dead_tail = all(
             _is_padding_insn(cache.insns.get(head) or {})
-            for head in rest
-        ):
-            limit = heads[pad_start]
+            for head in cache.instruction_heads(pad_head, func_end)
+        )
+        if dead_tail:
+            limit = pad_head
+        else:
+            for head in run:
+                insn = cache.insns.get(head) or {}
+                if _is_dead_pad(insn) or (
+                    prev_barrier and not _is_nop_insn(insn)
+                ):
+                    limit = head
+                    break
     for index, head in enumerate(heads):
         insn = cache.insns.get(head)
         if insn is None:
             continue
         itype = insn.get("type") or ""
-        if itype in _STOP_FLOW_TYPES:
-            return min(head + int(insn.get("size") or 0), limit)
+        stop = _clip_barrier(insn)
         if itype in _CALL_TYPES and index + 1 < len(heads):
             nxt = cache.insns.get(heads[index + 1])
             if nxt is not None and (nxt.get("type") or "") == "trap":
-                return min(head + int(insn.get("size") or 0), limit)
+                stop = True
+        if not stop:
+            continue
+        flow_end = head + int(insn.get("size") or 0)
+        # The unreachable padding run after a barrier is one ``align``
+        # item; only a lone ``0x90`` remains a real head.
+        tail_end = flow_end
+        pads = []
+        for tail_head in heads[index + 1 :]:
+            tail_insn = cache.insns.get(tail_head)
+            if tail_insn is None or not _is_padding_insn(tail_insn):
+                break
+            pads.append(tail_head)
+        if len(pads) == 1 and _is_nop_insn(cache.insns.get(pads[0]) or {}):
+            tail_end = pads[0] + int(
+                (cache.insns.get(pads[0]) or {}).get("size") or 1
+            )
+        return min(tail_end, limit)
     return limit
 
 
@@ -1741,6 +1789,14 @@ def FlowChart(func) -> List[BasicBlock]:
     func_end = max(
         int(block["addr"]) + max(int(block["size"]), 1) for block in raw_blocks
     )
+    # A pad-only block that is a real branch target stays: IDA keeps it as a
+    # flow node (e.g. ``je`` landing on a lone ``nop`` before the merge).
+    referenced = {
+        int(raw[key])
+        for raw in raw_blocks
+        for key in ("fail", "jump")
+        if raw.get(key) is not None
+    }
     for block in raw_blocks:
         block_start = int(block["addr"])
         raw_end = block_start + max(int(block["size"]), 1)
@@ -1752,10 +1808,16 @@ def FlowChart(func) -> List[BasicBlock]:
             if block_end > block_start
             else []
         )
-        if not heads or all(
+        all_pad = bool(heads) and all(
             _is_padding_insn(cache.insns.get(head) or {}) for head in heads
-        ):
-            # IDA never makes a basic block out of pure padding.
+        )
+        dead_only = bool(heads) and all(
+            _is_dead_pad(cache.insns.get(head) or {}) for head in heads
+        )
+        if not heads or (all_pad and block_start not in referenced) or dead_only:
+            # IDA never makes a basic block out of unreachable pure padding,
+            # and ``int3``/invalid filler is never a head even when a jump
+            # targets it.  A referenced ``nop`` block does stay.
             dropped.append((block_start, raw_end))
             continue
         block_obj = BasicBlock(len(blocks), block_start, block_end)

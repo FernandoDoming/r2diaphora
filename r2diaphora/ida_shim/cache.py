@@ -860,15 +860,19 @@ class R2BinaryCache:
 
     def get_name(self, ea: int) -> str:
         entry = self.names.get(ea)
-        if entry is None:
-            return ""
-        return entry[0]
+        if entry is not None:
+            return entry[0]
+        # Synthesized functions (funclets, gap functions) carry their
+        # ``sub_<ea>`` name in the functions table only.
+        info = self.functions.get(ea)
+        return (info or {}).get("name") or ""
 
     def get_true_name(self, ea: int) -> str:
         entry = self.names.get(ea)
-        if entry is None:
-            return ""
-        return entry[1]
+        if entry is not None:
+            return entry[1]
+        info = self.functions.get(ea)
+        return (info or {}).get("name") or ""
 
     def get_func_ea(self, ea: int) -> int:
         """Return the function containing ``ea`` or ``BADADDR``."""
@@ -1447,6 +1451,9 @@ class R2BinaryCache:
         self._synthesize_funclets()
         self._split_unowned()
         self._recover_gap_blocks()
+        self._materialize_flow_targets()
+        self._resolve_foreign_claims()
+        self._decode_block_strays()
         self.insn_owned = {
             head
             for blocks in self.func_blocks.values()
@@ -1454,6 +1461,241 @@ class R2BinaryCache:
             for head in block.get("instrs", ())
         }
         self._register_insn_refs()
+
+    def _materialize_flow_targets(self) -> None:
+        """Attach branch-target code outside ``afbj`` block coverage.
+
+        IDA's flow chart includes every run of code a function's blocks
+        jump to, even when ``afbj`` attributes it to a different function
+        or to no function at all (shared ``leave; ret`` epilogues, tail
+        chunks).  Materialize the contiguous decoded run at each such
+        target into real blocks of the referencing function.  Function
+        entries stay external: jumping to one is a tail call.
+        """
+        for func_ea in list(self.func_blocks):
+            blocks = self.func_blocks[func_ea]
+            raw_starts = {int(b["addr"]) for b in blocks}
+            targets = {
+                int(b[key])
+                for b in blocks
+                for key in ("fail", "jump")
+                if b.get(key) is not None
+            } - raw_starts
+            boundaries = targets | raw_starts | set(self.functions)
+            additions = []
+            covered_targets = set()
+            for target in sorted(targets):
+                if target in self.functions or target in covered_targets:
+                    continue
+                if (
+                    self.insns.get(target) is None
+                    and self.get_bytes(target, 1) != b"\x90"
+                ):
+                    continue
+                if not self._is_executable(target):
+                    continue
+                seg_start = target
+                cursor = target
+                while True:
+                    insn = self.insns.get(cursor)
+                    if insn is None and self.get_bytes(cursor, 1) == b"\x90":
+                        # A ``0x90`` filler inside a flow-targeted run is a
+                        # real head in IDA (patch-site padding).
+                        insn = {
+                            "addr": cursor,
+                            "bytes": "90",
+                            "size": 1,
+                            "type": "nop",
+                            "mnemonic": "nop",
+                            "disasm": "nop",
+                            "opcode": "nop",
+                            "opex": {"operands": []},
+                        }
+                        self._register_instruction(insn)
+                    if (
+                        insn is None
+                        or not self._is_executable(cursor)
+                        or (cursor in boundaries and cursor != seg_start)
+                    ):
+                        break
+                    itype = insn.get("type") or ""
+                    next_ea = cursor + int(insn.get("size") or 1)
+                    if itype in _STOP_FLOW_TYPES:
+                        jump = _int_or_none(insn.get("jump"))
+                        if jump is None:
+                            jump = _int_or_none(insn.get("ptr"))
+                        fail = next_ea if itype == "cjmp" else None
+                        additions.append((seg_start, next_ea, jump, fail))
+                        covered_targets.add(seg_start)
+                        seg_start = cursor = next_ea
+                        break
+                    cursor = next_ea
+                    if cursor in boundaries:
+                        additions.append((seg_start, cursor, None, cursor))
+                        covered_targets.add(seg_start)
+                        seg_start = cursor
+                if cursor > seg_start:
+                    additions.append((seg_start, cursor, None, cursor))
+                    covered_targets.add(seg_start)
+            for p_start, p_end, p_jump, p_fail in additions:
+                if p_end <= p_start:
+                    continue
+                heads = self.instruction_heads(p_start, p_end)
+                if not heads:
+                    continue
+                blocks.append(
+                    {
+                        "addr": p_start,
+                        "size": p_end - p_start,
+                        "jump": p_jump,
+                        "fail": p_fail,
+                        "ninstr": len(heads),
+                        "instrs": heads,
+                        "materialized": True,
+                    }
+                )
+            if additions:
+                blocks.sort(key=lambda b: b["addr"])
+
+    def _claimed_by(self, addr: int, func_ea: int) -> Optional[int]:
+        """Return the function whose own code claim covers ``addr``.
+
+        A function claims every instruction inside its analysed
+        (non-materialized) block spans from its entry on; materialized
+        shared-tail blocks do not claim anything - they only *use* code
+        another function may own too.
+        """
+        for other, blocks in self.func_blocks.items():
+            if other == func_ea or addr < other:
+                continue
+            for block in blocks:
+                if block.get("materialized"):
+                    continue
+                start = int(block["addr"])
+                if start <= addr < start + max(int(block["size"]), 1):
+                    return other
+        return None
+
+    def _resolve_foreign_claims(self) -> None:
+        """Drop blocks and instructions claimed by a different function.
+
+        ``afbj`` sometimes folds a neighbouring function's entry run into
+        the preceding function's block list (inlined stubs, compiler-cloned
+        helpers).  The function that owns the region keeps it: analysed
+        blocks that start inside another function's claimed span are
+        dropped and analysed block instruction lists are cut at the first
+        foreign-owned head.
+        """
+        for func_ea, blocks in list(self.func_blocks.items()):
+            kept = []
+            changed = False
+            for block in blocks:
+                if block.get("materialized"):
+                    kept.append(block)
+                    continue
+                b_start = int(block["addr"])
+                if self._claimed_by(b_start, func_ea) is not None:
+                    changed = True
+                    continue
+                instrs = block.get("instrs") or []
+                cut = None
+                for head in instrs:
+                    if self._claimed_by(head, func_ea) is not None:
+                        cut = head
+                        break
+                if cut is not None:
+                    changed = True
+                    block = dict(block)
+                    block["instrs"] = [h for h in instrs if h < cut]
+                    block["size"] = cut - b_start
+                    tail = (
+                        self.insns.get(block["instrs"][-1])
+                        if block["instrs"]
+                        else None
+                    )
+                    tail_type = (tail or {}).get("type") or ""
+                    block["jump"] = (
+                        _int_or_none((tail or {}).get("jump"))
+                        if tail_type in _JMP_TYPES
+                        else None
+                    )
+                    block["fail"] = (
+                        None if tail_type in _TERMINAL_TYPES else cut
+                    )
+                kept.append(block)
+            if changed:
+                self.func_blocks[func_ea] = kept
+
+    def _decode_block_strays(self) -> None:
+        """Decode bytes inside block ranges that radare2 skipped.
+
+        IDA marks every decodable byte inside a function's blocks as an
+        instruction head (FuncItems).  ``afbj`` sometimes leaves a stray
+        byte undecoded inside a block - typically the ``nop`` filler after
+        a patch-site ``jmp`` - so the head, the instruction count and any
+        fallthrough reference it carries are missing.  Decode those bytes
+        and splice them into the owning block's instruction list.
+        """
+        strays: List[int] = []
+        for blocks in self.func_blocks.values():
+            for block in blocks:
+                covered = set()
+                for head in block.get("instrs", ()):
+                    insn = self.insns.get(head)
+                    size = int((insn or {}).get("size") or 1)
+                    covered.update(range(head, head + size))
+                start = int(block["addr"])
+                end = start + max(int(block["size"]), 1)
+                for off in range(start, end):
+                    # IDA only promotes skipped ``0x90`` bytes to heads;
+                    # multi-byte nops and embedded data stay data items.
+                    if off in covered or self.get_bytes(off, 1) != b"\x90":
+                        continue
+                    strays.append(off)
+        if not strays:
+            return
+        script = ["e log.level=0"]
+        for off in strays:
+            script.append("?e " + SECTION_PREFIX + "s:%x" % off)
+            script.append("s 0x%x" % off)
+            script.append("aoj 1")
+        raw = self._run_script(script)
+        data = _split_sections(raw)
+        coverage = {
+            head
+            for insn in self.insns.values()
+            for head in range(
+                int(insn.get("addr") or 0),
+                int(insn.get("addr") or 0) + int(insn.get("size") or 1),
+            )
+        }
+        for off in strays:
+            decoded = None
+            for document in _parse_json_stream(data.get("s:%x" % off) or ""):
+                if not isinstance(document, list):
+                    continue
+                for insn in document:
+                    if int(insn.get("addr") or 0) == off:
+                        decoded = insn
+                        break
+            if decoded is None:
+                continue
+            size = int(decoded.get("size") or 1)
+            # Skip decodes that overlap bytes already owned by other
+            # instructions (a stray prefix byte would shadow real code).
+            if any(off + i in coverage for i in range(size)):
+                continue
+            self._register_instruction(decoded)
+            coverage.update(range(off, off + size))
+            for blocks in self.func_blocks.values():
+                for block in blocks:
+                    start = int(block["addr"])
+                    end = start + max(int(block["size"]), 1)
+                    if start <= off < end:
+                        instrs = block.setdefault("instrs", [])
+                        if off not in instrs:
+                            instrs.append(off)
+                            instrs.sort()
 
     def _register_insn_refs(self) -> None:
         """Create code/data xrefs from every decoded instruction operand.
@@ -2100,7 +2342,55 @@ def _is_padding_insn(instruction: dict) -> bool:
             raw = b""
     if raw and set(raw) <= {0x90, 0xCC}:
         return True
-    return (instruction.get("type") or "") in ("invalid", "ill")
+    if (instruction.get("type") or "") in ("invalid", "ill"):
+        return True
+    # Multi-byte ``nop`` forms (``0f 1f`` with any prefix run) are ``align``
+    # data items in IDA, not instruction heads.  ``66 90`` is a real ``xchg``
+    # instruction, so only the ``0f 1f`` opcode family counts as padding.
+    if (instruction.get("type") or "") == "nop":
+        index = 0
+        while index < len(raw) and raw[index] in (
+            0x66, 0x2E, 0x3E, 0x26, 0x64, 0x65, 0x67, 0xF0, 0xF2, 0xF3,
+        ):
+            index += 1
+        if raw[index : index + 2] == b"\x0f\x1f":
+            return True
+    return False
+
+
+def _is_nop_insn(instruction: dict) -> bool:
+    """True for ``0x90``-byte nops: real instruction heads in IDA's model
+    (unlike ``int3`` filler, which IDA never counts)."""
+    raw = instruction.get("raw_bytes")
+    if raw is None:
+        try:
+            raw = bytes.fromhex(instruction.get("bytes") or "")
+        except ValueError:
+            raw = b""
+    return bool(raw) and set(raw) == {0x90}
+
+
+def _is_dead_pad(instruction: dict) -> bool:
+    """True for padding IDA never makes a head: ``int3``/invalid filler and
+    runs mixing ``0xcc`` bytes.  ``0x90`` nops and ``0f 1f`` alignments are
+    live padding - heads whenever they are reachable."""
+    if not _is_padding_insn(instruction):
+        return False
+    if (instruction.get("type") or "") in (
+        "invalid",
+        "ill",
+        "trap",
+        "int3",
+        "hlt",
+    ):
+        return True
+    raw = instruction.get("raw_bytes")
+    if raw is None:
+        try:
+            raw = bytes.fromhex(instruction.get("bytes") or "")
+        except ValueError:
+            raw = b""
+    return bool(raw) and 0xCC in raw
 
 
 def _int_or_none(value: Any) -> Optional[int]:
