@@ -974,9 +974,7 @@ class R2BinaryCache:
         script = self._analysis_prefix()
         for func_ea in targets:
             script.append("?e " + SECTION_PREFIX + "c:%x" % func_ea)
-            script.append("pdg @ 0x%x" % func_ea)
-            script.append("?e " + SECTION_PREFIX + "x:%x" % func_ea)
-            script.append("pdgx @ 0x%x" % func_ea)
+            script.append("pdgj @ 0x%x" % func_ea)
         raw = self._run_script(script)
         data = _split_sections(raw)
 
@@ -988,10 +986,13 @@ class R2BinaryCache:
             return
         self.decompiler_available = True
 
+        def resolve_name(name: str, offset: int) -> str:
+            resolved = self.get_name(int(offset)) or str(name)
+            return clean_r2_pseudocode_line(resolved)
+
         for func_ea in targets:
-            text = data.get("c:%x" % func_ea) or ""
-            xml = data.get("x:%x" % func_ea) or ""
-            self.decompiled[func_ea] = _build_decompilation(text, xml)
+            section = data.get("c:%x" % func_ea) or ""
+            self.decompiled[func_ea] = _build_decompilation(section, resolve_name)
 
     def get_decompiled(self, func_ea: int) -> Optional[dict]:
         if func_ea in self.decompiled:
@@ -2282,16 +2283,69 @@ def strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
 
 
-def _build_decompilation(text: str, xml: str) -> dict:
-    """Turn one ``pdg``/``pdgx`` pair into the shape upstream expects."""
-    cleaned = strip_ansi(text)
+_EXPR_RE = re.compile(r"\b(sub|fcn|loc)\.([0-9a-fA-F]+)\b")
+_IMP_RE = re.compile(r"\b(?:sym\.imp\.|imp\.)(?:[A-Za-z0-9_]+\.)+([A-Za-z0-9_@$?]+)")
+_SYM_RE = re.compile(r"\bsym\.([A-Za-z0-9_@$.]+)")
+
+
+def clean_r2_pseudocode_line(line: str) -> str:
+    """Normalize radare2 specific identifiers in a pseudocode line."""
+    line = strip_ansi(line)
+
+    def _sub(match):
+        return "sub_" + match.group(2).lower()
+
+    line = _EXPR_RE.sub(_sub, line)
+    line = _IMP_RE.sub(lambda m: m.group(1), line)
+    line = _SYM_RE.sub(lambda m: m.group(1), line)
+    return line
+
+
+def _build_decompilation(section: str, resolve_name=None) -> dict:
+    """Turn one ``pdgj`` document into the shape upstream expects.
+
+    ``pdgj`` emits a single JSON object per function: ``code`` holds the
+    decompiled text, ``pcode_ops`` the ghidra p-code op numbers used as
+    ``CAstVisitor`` hash material, and ``annotations`` maps printed tokens
+    to the symbols and addresses they resolve to.  Warnings or errors
+    printed before the JSON (missing plugin, undecodable thunks) yield a
+    not-ok entry, never an exception.
+    """
+    start = section.find("{")
+    doc = None
+    if start >= 0:
+        try:
+            doc = json.loads(section[start:])
+        except Exception:
+            doc = None
+    if not isinstance(doc, dict):
+        return {"prototype": None, "lines": [], "ast": [], "ok": False}
+
+    code = doc.get("code") or ""
+    if resolve_name is not None:
+        spans = [
+            ann
+            for ann in doc.get("annotations") or ()
+            if ann.get("name") and isinstance(ann.get("offset"), int)
+        ]
+        for ann in sorted(spans, key=lambda a: a["start"], reverse=True):
+            begin, end = int(ann["start"]), int(ann["end"])
+            if 0 <= begin < end <= len(code):
+                name = resolve_name(ann["name"], ann["offset"])
+                code = code[:begin] + name + code[end:]
+
+    cleaned = strip_ansi(code)
     lines = [line.rstrip() for line in cleaned.splitlines()]
     lines = [line for line in lines if line.strip()]
     lines = [line for line in lines if not line.lstrip().startswith("//")]
 
     prototype = lines[0].strip() if lines else None
     body = lines[1:] if len(lines) > 1 else []
-    ast_nodes = parse_pdgx_codes(xml)
+    ast_nodes = [
+        int(op["opcode"])
+        for op in doc.get("pcode_ops") or ()
+        if not op.get("is_dead") and op.get("opcode") is not None
+    ]
 
     return {
         "prototype": prototype,
@@ -2299,33 +2353,6 @@ def _build_decompilation(text: str, xml: str) -> dict:
         "ast": ast_nodes,
         "ok": prototype is not None,
     }
-
-
-def parse_pdgx_codes(xml_text: str) -> List[int]:
-    """Collect the ghidra p-code operation numbers of a ``pdgx`` document."""
-    if not xml_text:
-        return []
-    start = xml_text.find("<result")
-    if start < 0:
-        start = xml_text.find("<function")
-    if start < 0:
-        return []
-    try:
-        import xml.etree.ElementTree as ET
-
-        root = ET.fromstring(xml_text[start:])
-    except Exception:
-        return []
-    codes = []
-    for element in root.iter():
-        if element.tag in ("op", "statement", "block"):
-            value = element.get("code")
-            if value:
-                try:
-                    codes.append(int(value, 0))
-                except ValueError:
-                    continue
-    return codes
 
 
 def _is_padding_insn(instruction: dict) -> bool:

@@ -1,6 +1,8 @@
+import json
+
 from r2diaphora.ida_shim import ida_hexrays, state
-from r2diaphora.ida_shim.cache import R2BinaryCache
-from r2diaphora.ida_shim.decompiler import decompile_with_r2, parse_pdgx_xml_to_ast
+from r2diaphora.ida_shim.cache import R2BinaryCache, _build_decompilation
+from r2diaphora.ida_shim.decompiler import decompile_with_r2
 from r2diaphora.upstream.jkutils.factor import primesbelow
 
 CALC = r"C:\Windows\System32\calc.exe"
@@ -21,24 +23,69 @@ class DummyAstVisitor(ida_hexrays.ctree_visitor_t):
         return 0
 
 
-def test_parse_pdgx_handles_malformed_or_prefixed_xml():
-    # Review Focus #4: non-XML warning lines or empty output must not raise
-    proto, lines, nodes = parse_pdgx_xml_to_ast("WARNING: some r2 message\nnot xml")
-    assert proto is None
-    assert lines == []
-    assert nodes == []
+def test_build_decompilation_handles_malformed_or_nonjson_output():
+    # Non-JSON warning lines or empty output must not raise
+    entry = _build_decompilation("WARNING: some r2 message\nnot json")
+    assert entry == {"prototype": None, "lines": [], "ast": [], "ok": False}
+    assert _build_decompilation("")["ok"] is False
 
 
-def test_parse_pdgx_reads_real_xml():
-    xml = (
-        "<result><function><funcname>int f(void)</funcname>"
-        "<syntax>return 0;</syntax><op code=\"3\"></op><op code=\"5\"></op>"
-        "</function></result>"
+def test_build_decompilation_reads_real_pdgj_doc():
+    code = "\nvoid fcn.140001000(void)\n\n{\n    fcn.140002000();\n    return;\n}\n"
+    # "fcn.140002000" spans chars 35..47 of code
+    target = "fcn.140002000"
+    start = code.index(target)
+    doc = {
+        "code": code,
+        "annotations": [
+            {
+                "start": start,
+                "end": start + len(target),
+                "type": "function_name",
+                "name": target,
+                "offset": 0x140002000,
+            }
+        ],
+        "pcode_ops": [
+            {"opcode": 64, "is_dead": False},
+            {"opcode": 7, "is_dead": False},
+            {"opcode": 66, "is_dead": True},
+        ],
+    }
+    resolved = {}
+    entry = _build_decompilation(
+        json.dumps(doc),
+        resolve_name=lambda name, off: resolved.setdefault(
+            off, "sub_%x" % off
+        ),
     )
-    proto, lines, nodes = parse_pdgx_xml_to_ast(xml)
-    assert proto == "int f(void)"
-    assert lines == ["return 0;"]
-    assert nodes == [("expr", 3), ("expr", 5)]
+    assert entry["ok"] is True
+    assert entry["prototype"] == "void fcn.140001000(void)"
+    assert "    sub_140002000();" in entry["lines"]
+    assert "fcn.140002000" not in "\n".join(entry["lines"])
+    # Dead ops are excluded from the hash material
+    assert entry["ast"] == [64, 7]
+
+
+def test_build_decompilation_without_resolver_keeps_raw_names():
+    code = "void f(void)\n{\n    fcn.140002000();\n}\n"
+    start = code.index("fcn.140002000")
+    doc = {
+        "code": code,
+        "annotations": [
+            {
+                "start": start,
+                "end": start + len("fcn.140002000"),
+                "type": "function_name",
+                "name": "fcn.140002000",
+                "offset": 0x140002000,
+            }
+        ],
+        "pcode_ops": [{"opcode": 5, "is_dead": False}],
+    }
+    entry = _build_decompilation(json.dumps(doc))
+    assert entry["ok"] is True
+    assert entry["ast"] == [5]
 
 
 def test_decompile_and_ast_visitor_on_calc_exe():

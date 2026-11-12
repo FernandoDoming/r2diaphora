@@ -1,9 +1,8 @@
-"""r2ghidra/pdc backed replacement for the Hex-Rays pieces Diaphora uses."""
+"""r2ghidra ``pdgj`` backed replacement for the Hex-Rays pieces Diaphora uses."""
 
-import re
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
-from r2diaphora.ida_shim.cache import parse_pdgx_codes, strip_ansi
+from r2diaphora.ida_shim.cache import clean_r2_pseudocode_line
 
 # Hex-Rays ctree expression/statement op codes are only used by Diaphora as
 # stable indexes into a prime table, so a literal copy of IDA's table is not
@@ -144,70 +143,6 @@ class MockCFunc:
         return f"MockCFunc(entry_ea=0x{self.entry_ea:x}, lines={len(self._lines)})"
 
 
-_EXPR_RE = re.compile(r"\b(sub|fcn|loc)\.([0-9a-fA-F]+)\b")
-_IMP_RE = re.compile(r"\b(?:sym\.imp\.|imp\.)(?:[A-Za-z0-9_]+\.)+([A-Za-z0-9_@$?]+)")
-_SYM_RE = re.compile(r"\bsym\.([A-Za-z0-9_@$.]+)")
-
-
-def clean_r2_pseudocode_line(line: str) -> str:
-    """Normalize radare2 specific identifiers in a pseudocode line."""
-    line = strip_ansi(line)
-
-    def _sub(match):
-        return "sub_" + match.group(2).lower()
-
-    line = _EXPR_RE.sub(_sub, line)
-    line = _IMP_RE.sub(lambda m: m.group(1), line)
-    line = _SYM_RE.sub(lambda m: m.group(1), line)
-    return line
-
-
-def parse_pdgx_xml_to_ast(xml_text: str) -> Tuple[Optional[str], List[str], List[Tuple[str, int]]]:
-    """Parse a ``pdgx`` document.
-
-    Returns ``(None, [], [])`` when the payload is not XML at all, which is what
-    radare2 emits for warnings and 1-instruction thunks.
-    """
-    if not xml_text:
-        return None, [], []
-    start = xml_text.find("<result")
-    if start < 0:
-        start = xml_text.find("<function")
-    if start < 0:
-        return None, [], []
-    try:
-        import xml.etree.ElementTree as ET
-
-        root = ET.fromstring(xml_text[start:])
-    except Exception:
-        return None, [], []
-
-    prototype = None
-    funcname = root.find(".//funcname")
-    if funcname is not None and funcname.text:
-        prototype = funcname.text.strip()
-
-    lines: List[str] = []
-    for syntax in root.iter("syntax"):
-        text = "".join(syntax.itertext()).strip()
-        if text:
-            lines.append(clean_r2_pseudocode_line(text))
-
-    nodes: List[Tuple[str, int]] = []
-    for element in root.iter():
-        if element.tag != "op":
-            continue
-        value = element.get("code")
-        if not value:
-            continue
-        try:
-            nodes.append(("expr", int(value, 0)))
-        except ValueError:
-            continue
-
-    return prototype, lines, nodes
-
-
 def decompile_with_r2(cache, ea: int, timeout: float = 15.0) -> Optional[MockCFunc]:
     """Decompile ``ea`` through the cache (batch decompilation, no IPC here)."""
     func_ea = ea
@@ -221,7 +156,3 @@ def decompile_with_r2(cache, ea: int, timeout: float = 15.0) -> Optional[MockCFu
     if prototype is not None:
         prototype = clean_r2_pseudocode_line(prototype)
     return MockCFunc(func_ea, prototype, lines, entry["ast"])
-
-
-def ast_codes_from_xml(xml_text: str) -> List[int]:
-    return parse_pdgx_codes(xml_text)
