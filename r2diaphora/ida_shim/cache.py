@@ -311,6 +311,8 @@ class R2BinaryCache:
 
         self._segments_bytes: List[Tuple[int, bytes]] = []
         self._func_starts: List[int] = []
+        self.decompiled: Dict[int, dict] = {}
+        self.decompiler_available: Optional[bool] = None
         self._closed = False
 
         self._build()
@@ -403,6 +405,43 @@ class R2BinaryCache:
             ea += max(insn["size"], 1)
         return heads
 
+    # -- decompiler ---------------------------------------------------------
+
+    def decompile_all(self, func_eas: Optional[List[int]] = None) -> None:
+        """Decompile every function in one radare2 run and cache the result."""
+        if self.decompiler_available is False:
+            return
+        targets = list(func_eas if func_eas is not None else self.sorted_func_eas)
+        script = self._analysis_prefix()
+        for func_ea in targets:
+            script.append("?e " + SECTION_PREFIX + "c:%x" % func_ea)
+            script.append("pdg @ 0x%x" % func_ea)
+            script.append("?e " + SECTION_PREFIX + "x:%x" % func_ea)
+            script.append("pdgx @ 0x%x" % func_ea)
+        raw = self._run_script(script)
+        data = _split_sections(raw)
+
+        if all(
+            "You need to install the plugin" in (data.get("c:%x" % ea) or "")
+            for ea in targets
+        ):
+            self.decompiler_available = False
+            return
+        self.decompiler_available = True
+
+        for func_ea in targets:
+            text = data.get("c:%x" % func_ea) or ""
+            xml = data.get("x:%x" % func_ea) or ""
+            self.decompiled[func_ea] = _build_decompilation(text, xml)
+
+    def get_decompiled(self, func_ea: int) -> Optional[dict]:
+        if func_ea in self.decompiled:
+            return self.decompiled[func_ea]
+        if self.decompiler_available is False:
+            return None
+        self.decompile_all([func_ea])
+        return self.decompiled.get(func_ea)
+
     # -- loading ------------------------------------------------------------
 
     def _file_md5(self) -> str:
@@ -451,7 +490,7 @@ class R2BinaryCache:
             except OSError:
                 pass
 
-    def _build(self) -> None:
+    def _analysis_prefix(self) -> List[str]:
         script = [
             "e log.level=0",
             "e scr.color=0",
@@ -465,6 +504,10 @@ class R2BinaryCache:
         for seed in self._pdata_seeds():
             script.append("af @ 0x%x" % seed)
         script.append("aaaa")
+        return script
+
+    def _build(self) -> None:
+        script = self._analysis_prefix()
 
         sections: List[Tuple[str, str]] = [
             ("info", "ij"),
@@ -794,6 +837,59 @@ class R2BinaryCache:
             back = self.code_refs_to.setdefault(ref, [])
             if address not in back:
                 back.append(address)
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
+
+
+def _build_decompilation(text: str, xml: str) -> dict:
+    """Turn one ``pdg``/``pdgx`` pair into the shape upstream expects."""
+    cleaned = strip_ansi(text)
+    lines = [line.rstrip() for line in cleaned.splitlines()]
+    lines = [line for line in lines if line.strip()]
+    lines = [line for line in lines if not line.lstrip().startswith("//")]
+
+    prototype = lines[0].strip() if lines else None
+    body = lines[1:] if len(lines) > 1 else []
+    ast_nodes = parse_pdgx_codes(xml)
+
+    return {
+        "prototype": prototype,
+        "lines": body,
+        "ast": ast_nodes,
+        "ok": prototype is not None,
+    }
+
+
+def parse_pdgx_codes(xml_text: str) -> List[int]:
+    """Collect the ghidra p-code operation numbers of a ``pdgx`` document."""
+    if not xml_text:
+        return []
+    start = xml_text.find("<result")
+    if start < 0:
+        start = xml_text.find("<function")
+    if start < 0:
+        return []
+    try:
+        import xml.etree.ElementTree as ET
+
+        root = ET.fromstring(xml_text[start:])
+    except Exception:
+        return []
+    codes = []
+    for element in root.iter():
+        if element.tag in ("op", "statement", "block"):
+            value = element.get("code")
+            if value:
+                try:
+                    codes.append(int(value, 0))
+                except ValueError:
+                    continue
+    return codes
 
 
 def _int_or_none(value: Any) -> Optional[int]:
