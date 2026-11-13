@@ -1693,6 +1693,16 @@ def FlowChart(func) -> List[BasicBlock]:
         start = int(start)
     except (TypeError, ValueError):
         return []
+    # Upstream asks for the same chart several times per function (feature
+    # extraction, the KGH hasher, magic-string scanning); block building is
+    # the expensive part so the finished chart is memoized per function.
+    # Callers only iterate succs()/preds(), so sharing is safe.
+    flow_cache = getattr(cache, "flow_chart_cache", None)
+    if flow_cache is None:
+        flow_cache = cache.flow_chart_cache = {}
+    cached = flow_cache.get(start)
+    if cached is not None:
+        return list(cached)
     raw_blocks = cache.get_blocks(start)
     if not raw_blocks:
         info = cache.functions.get(start)
@@ -1965,6 +1975,7 @@ def FlowChart(func) -> List[BasicBlock]:
             for index, block in enumerate(pruned):
                 block.id = index
             chart = pruned
+    flow_cache[start] = chart
     return chart
 
 # ---------------------------------------------------------------------------

@@ -15,6 +15,7 @@ about 0.2 seconds.
 """
 
 import bisect
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -849,6 +850,7 @@ class R2BinaryCache:
         self._segments_bytes: List[Tuple[int, bytes]] = []
         self._pe_section_bytes: Dict[str, bytes] = {}
         self._func_starts: List[int] = []
+        self._heads_cache: Dict[Tuple[int, int], List[int]] = {}
         self.decompiled: Dict[int, dict] = {}
         self.decompiler_available: Optional[bool] = None
         self._closed = False
@@ -1004,15 +1006,19 @@ class R2BinaryCache:
         return None
 
     def instruction_heads(self, start: int, end: int) -> List[int]:
-        heads = []
-        ea = start
-        while ea < end:
-            insn = self.insns.get(ea)
-            if insn is None:
-                break
-            heads.append(ea)
-            ea += max(insn["size"], 1)
-        return heads
+        key = (start, end)
+        cached = self._heads_cache.get(key)
+        if cached is None:
+            heads = []
+            ea = start
+            while ea < end:
+                insn = self.insns.get(ea)
+                if insn is None:
+                    break
+                heads.append(ea)
+                ea += max(insn["size"], 1)
+            self._heads_cache[key] = heads
+        return list(cached if cached is not None else heads)
 
     def prune_functions(self, predicate) -> None:
         """Drop functions for which ``predicate(info)`` is false.
@@ -1036,16 +1042,39 @@ class R2BinaryCache:
     # -- decompiler ---------------------------------------------------------
 
     def decompile_all(self, func_eas: Optional[List[int]] = None) -> None:
-        """Decompile every function in one radare2 run and cache the result."""
+        """Decompile every function and cache the results.
+
+        ``pdgj`` is issued for all functions inside one radare2 process,
+        which is the dominant pipeline cost on large binaries (~85ms per
+        function).  Each worker process is independent, so the target
+        list is split into contiguous chunks decompiled in parallel.
+        """
         if self.decompiler_available is False:
             return
         targets = list(func_eas if func_eas is not None else self.sorted_func_eas)
-        script = self._analysis_prefix()
-        for func_ea in targets:
-            script.append("?e " + SECTION_PREFIX + "c:%x" % func_ea)
-            script.append("pdgj @ 0x%x" % func_ea)
-        raw = self._run_script(script)
-        data = _split_sections(raw)
+        if not targets:
+            return
+
+        workers = self._decompile_workers(len(targets))
+
+        def run_chunk(chunk: List[int]) -> Dict[str, str]:
+            script = self._analysis_prefix()
+            for func_ea in chunk:
+                script.append("?e " + SECTION_PREFIX + "c:%x" % func_ea)
+                script.append("pdgj @ 0x%x" % func_ea)
+            return _split_sections(self._run_script(script))
+
+        if workers <= 1:
+            data = run_chunk(targets)
+        else:
+            step = (len(targets) + workers - 1) // workers
+            chunks = [
+                targets[i : i + step] for i in range(0, len(targets), step)
+            ]
+            data: Dict[str, str] = {}
+            with concurrent.futures.ThreadPoolExecutor(workers) as pool:
+                for part in pool.map(run_chunk, chunks):
+                    data.update(part)
 
         if all(
             "You need to install the plugin" in (data.get("c:%x" % ea) or "")
@@ -1062,6 +1091,24 @@ class R2BinaryCache:
         for func_ea in targets:
             section = data.get("c:%x" % func_ea) or ""
             self.decompiled[func_ea] = _build_decompilation(section, resolve_name)
+
+    def _decompile_workers(self, target_count: int) -> int:
+        """Worker count for parallel decompilation.
+
+        Each worker re-runs the analysis prefix inside its own radare2
+        process, so parallelism only pays off once the per-function
+        ``pdgj`` cost dominates; small batches stay on one worker.
+        ``R2DIA_WORKERS`` overrides the automatic choice.
+        """
+        override = os.environ.get("R2DIA_WORKERS", "").strip()
+        if override:
+            try:
+                return max(1, min(int(override), 32))
+            except ValueError:
+                pass
+        if target_count < 64:
+            return 1
+        return max(1, min(4, os.cpu_count() or 1))
 
     def get_decompiled(self, func_ea: int) -> Optional[dict]:
         if func_ea in self.decompiled:
@@ -2849,6 +2896,8 @@ class R2BinaryCache:
         instruction["ops"] = operands
         instruction["decoded_size"] = min(decoded_size, max(size, 1))
         self.insns[address] = instruction
+        if self._heads_cache:
+            self._heads_cache.clear()
 
         jump = _int_or_none(instruction.get("jump"))
         if jump:
