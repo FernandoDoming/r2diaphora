@@ -1696,25 +1696,6 @@ class R2BinaryCache:
             if additions:
                 blocks.sort(key=lambda b: b["addr"])
 
-    def _claimed_by(self, addr: int, func_ea: int) -> Optional[int]:
-        """Return the function whose own code claim covers ``addr``.
-
-        A function claims every instruction inside its analysed
-        (non-materialized) block spans from its entry on; materialized
-        shared-tail blocks do not claim anything - they only *use* code
-        another function may own too.
-        """
-        for other, blocks in self.func_blocks.items():
-            if other == func_ea or addr < other:
-                continue
-            for block in blocks:
-                if block.get("materialized"):
-                    continue
-                start = int(block["addr"])
-                if start <= addr < start + max(int(block["size"]), 1):
-                    return other
-        return None
-
     def _resolve_foreign_claims(self) -> None:
         """Drop blocks and instructions claimed by a different function.
 
@@ -1724,7 +1705,54 @@ class R2BinaryCache:
         blocks that start inside another function's claimed span are
         dropped and analysed block instruction lists are cut at the first
         foreign-owned head.
+
+        Claim lookups go through an index built over all claimed spans:
+        iterating ``func_blocks`` for every head is quadratic in the
+        number of functions and dominates the analysis cost on large
+        binaries.  The index is rebuilt lazily whenever ``func_blocks``
+        changes so claim semantics are identical to the live view.
         """
+        state: Dict[str, Any] = {"dirty": True, "starts": [], "claims": [], "max_end": []}
+
+        def rebuild() -> None:
+            claims = []
+            for owner, fblocks in self.func_blocks.items():
+                for fblock in fblocks:
+                    if fblock.get("materialized"):
+                        continue
+                    start = int(fblock["addr"])
+                    end = start + max(int(fblock["size"]), 1)
+                    start = max(start, owner)
+                    if end > start:
+                        claims.append((start, end, owner))
+            claims.sort()
+            state["claims"] = claims
+            state["starts"] = [entry[0] for entry in claims]
+            max_end = []
+            top = 0
+            for _, end, _ in claims:
+                top = max(top, end)
+                max_end.append(top)
+            state["max_end"] = max_end
+            state["dirty"] = False
+
+        def claimed_by(addr: int, func_ea: int) -> bool:
+            if state["dirty"]:
+                rebuild()
+            starts = state["starts"]
+            claims = state["claims"]
+            max_end = state["max_end"]
+            pos = bisect.bisect_right(starts, addr) - 1
+            # ``max_end`` upper-bounds the ends of every claim that starts
+            # at or before ``pos``; once it can no longer reach ``addr``
+            # no earlier claim covers it either.
+            while pos >= 0 and max_end[pos] > addr:
+                start, end, owner = claims[pos]
+                if end > addr and owner != func_ea:
+                    return True
+                pos -= 1
+            return False
+
         for func_ea, blocks in list(self.func_blocks.items()):
             kept = []
             changed = False
@@ -1733,13 +1761,13 @@ class R2BinaryCache:
                     kept.append(block)
                     continue
                 b_start = int(block["addr"])
-                if self._claimed_by(b_start, func_ea) is not None:
+                if claimed_by(b_start, func_ea):
                     changed = True
                     continue
                 instrs = block.get("instrs") or []
                 cut = None
                 for head in instrs:
-                    if self._claimed_by(head, func_ea) is not None:
+                    if claimed_by(head, func_ea):
                         cut = head
                         break
                 if cut is not None:
@@ -1764,6 +1792,7 @@ class R2BinaryCache:
                 kept.append(block)
             if changed:
                 self.func_blocks[func_ea] = kept
+                state["dirty"] = True
 
     def _decode_block_strays(self) -> None:
         """Decode bytes inside block ranges that radare2 skipped.
