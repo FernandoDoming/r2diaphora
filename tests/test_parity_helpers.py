@@ -20,8 +20,13 @@ class _StubCache:
         self.func_blocks = {}
         self.insns = {}
         self.strings_by_ea = {}
+        self.string_spans = []
+        self.ref_targets_sorted = []
         self.names = {}
         self.pe = SimpleNamespace(iat_ranges=[])
+
+    def is_switch_table(self, ea):
+        return False
 
     def instruction_heads(self, start, end):
         return sorted(ea for ea in self.insns if start <= ea < end)
@@ -42,6 +47,9 @@ class _StubCache:
         return self._raw.get(ea, b"")[:size]
 
     _raw = {}
+    func_noreturn = R2BinaryCache.func_noreturn
+    noreturn_call = R2BinaryCache.noreturn_call
+    is_iat_thunk_func = R2BinaryCache.is_iat_thunk_func
 
 
 def test_is_noreturn_name_matches_import_suffixes():

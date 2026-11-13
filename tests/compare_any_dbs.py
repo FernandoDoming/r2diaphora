@@ -37,7 +37,7 @@ from r2diaphora.diaphora_r2 import compare_dbs, generate_db_for_file  # noqa: E4
 # constants).  Larger binaries carry proportionally more of that surface.
 COLUMN_BUDGETS = {
     "calc.exe": {"kgh_hash": 6},
-    "whoami.exe": {"kgh_hash": 8, "constants": 2, "constants_count": 2},
+    "whoami.exe": {"kgh_hash": 8},
 }
 DEFAULT_BUDGETS = dict(BOUNDED_DIFF_COLUMNS)
 

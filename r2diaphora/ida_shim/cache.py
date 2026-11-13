@@ -97,6 +97,64 @@ _JMP_TYPES = frozenset(
 
 _CALL_TYPES = frozenset({"call", "ucall", "icall", "rcall", "ircall"})
 
+# Bytes per character for each ``iz`` string ``type``.
+_STRING_CHAR_WIDTH = {
+    "utf16le": 2,
+    "utf16be": 2,
+    "utf32le": 4,
+    "utf32be": 4,
+}
+
+_INDIRECT_JMP_TYPES = frozenset(
+    {"rjmp", "irjmp", "ujmp", "ijmp", "mjmp", "rcjmp", "ucjmp"}
+)
+
+# radare2 instruction types for unconditional jumps out of the function.
+_JMP_OUT_TYPES = frozenset({"jmp", "ujmp", "ijmp", "rjmp", "irjmp"})
+
+# Callee name suffixes IDA knows never return (CRT/process termination).
+_NORETURN_SUFFIXES = (
+    "_exit",
+    "exit",
+    "abort",
+    "terminate",
+    "invoke_watson",
+    "_watson",
+    "fatalappexita",
+    "fatalappexitw",
+    "fatalappexit",
+    "fatalexit",
+    "raisefailfastexception",
+    "fastfail",
+    "longjmp",
+    "longjmpex",
+    "cxxthrowexception",
+    "endthread",
+    "endthreadex",
+    "exitprocess",
+    "exitthread",
+    "rtlexituserthread",
+    "terminateprocess",
+)
+
+
+def _is_noreturn_name(name: str) -> bool:
+    """Match ``sym.imp.msvcrt.dll__exit``/``_terminate__YAXXZ``-style callee
+    names against IDA's noreturn functions."""
+    base = (name or "").lower().split("dll_")[-1].split(".")[-1].split("@")[0]
+    if not base.startswith("__"):
+        base = base.split("__")[0]
+    return any(base.endswith(suffix) for suffix in _NORETURN_SUFFIXES)
+
+_ABS_MEM_RE = re.compile(r"\[(0x[0-9a-fA-F]+)\]")
+
+_REG_IMM_RE = re.compile(
+    r"^(\w+)\s+([a-z][a-z0-9]*),\s*(0x[0-9a-fA-F]+|\d+)\s*$", re.IGNORECASE
+)
+
+_SWITCH_MAX_ENTRIES = 0x800
+_SWITCH_BOUND_WINDOW = 24
+
 OFFSET_OPERAND_TYPES = (O_MEM, O_IMM, O_FAR, O_NEAR, O_DISPL)
 
 _NAME_PREFIXES = ("sym.imp.", "sym.", "imp.")
@@ -777,10 +835,12 @@ class R2BinaryCache:
         self.comments_by_ea: Dict[int, str] = {}
         self.code_refs_from: Dict[int, List[int]] = {}
         self.code_refs_to: Dict[int, List[int]] = {}
+        self.dead_heads: set = set()
         self.data_refs_from: Dict[int, List[int]] = {}
         self.data_refs_to: Dict[int, List[int]] = {}
         self.try_regions: Dict[int, Dict[int, Dict[str, int]]] = {}
-        self.switches_by_insn: Dict[int, Tuple[int, List[int]]] = {}
+        self.switches_by_insn: Dict[int, Tuple[int, List[int], List[int]]] = {}
+        self.switch_table_ranges: List[Tuple[int, int]] = []
         self.segments: List[dict] = []
         self.sorted_insn_eas: List[int] = []
         self.insn_ends: Dict[int, int] = {}
@@ -895,10 +955,11 @@ class R2BinaryCache:
 
     def get_code_refs_from(self, ea: int, flow: int = 0) -> List[int]:
         refs = list(self.code_refs_from.get(ea, []))
-        # Only block-owned heads produce flow xrefs: stray decoded bytes in
-        # unowned padding (e.g. the ``nop`` before a function start) are not
-        # heads in IDA and carry no ``fl_F``.
-        if flow and ea in self.insn_owned:
+        # Only reachable block-owned heads produce flow xrefs: stray decoded
+        # bytes in unowned padding and heads clipped after a flow barrier
+        # (``nop``/``int3`` runs behind ``jmp``/noreturn calls) are not heads
+        # in IDA and carry no ``fl_F``.
+        if flow and ea in self.insn_owned and ea not in self.dead_heads:
             successor = _flow_successor(self.insns.get(ea))
             if successor is not None and successor not in refs:
                 refs.append(successor)
@@ -911,6 +972,7 @@ class R2BinaryCache:
             if (
                 predecessor_ea is not None
                 and predecessor_ea in self.insn_owned
+                and predecessor_ea not in self.dead_heads
                 and predecessor_ea not in refs
             ):
                 predecessor = self.insns.get(predecessor_ea)
@@ -927,6 +989,12 @@ class R2BinaryCache:
             for target in self.data_refs_from.get(ea, [])
             if self.is_mapped(target)
         ]
+
+    def is_switch_table(self, ea: int) -> bool:
+        """True when ``ea`` lies inside a recovered jump-table dword array."""
+        return any(
+            lo <= ea < hi for lo, hi in self.switch_table_ranges
+        )
 
     def get_segment_for(self, ea: int) -> Optional[dict]:
         for segment in self.segments:
@@ -1273,6 +1341,16 @@ class R2BinaryCache:
             address = int(entry.get("vaddr") or 0)
             if not address:
                 continue
+            # ``iz`` flags every printable run >=4 bytes, including the
+            # printable tail of a pointer-table entry (``(p#8`` is the low
+            # dword of ``0x338237028``).  IDA itemizes those as data, never
+            # as string literals - drop entries whose bytes read as an
+            # in-image pointer.
+            raw = self.get_bytes(address, 8)
+            if len(raw) == 8 and self.is_mapped(
+                int.from_bytes(raw, "little")
+            ):
+                continue
             self.strings_by_ea[address] = {
                 "ea": address,
                 "string": entry.get("string", ""),
@@ -1461,7 +1539,27 @@ class R2BinaryCache:
             for block in blocks
             for head in block.get("instrs", ())
         }
+        self.dead_heads = self._collect_dead_heads()
         self._register_insn_refs()
+        self._recover_switches()
+        # Item-start addresses: xref targets, named locations and defined
+        # strings all begin a new item in IDA's model, so a byte-item
+        # literal read may not cross them.
+        self.ref_targets_sorted = sorted(
+            set(self.code_refs_to)
+            | set(self.data_refs_to)
+            | set(self.names)
+            | set(self.strings_by_ea)
+        )
+        # Defined-string spans: a data ref landing *inside* a string item
+        # reads a character there, never a wide tail.
+        self.string_spans = sorted(
+            (
+                ea,
+                ea + max(entry.get("length") or 0, 1) * _STRING_CHAR_WIDTH.get(entry.get("type"), 1),
+            )
+            for ea, entry in self.strings_by_ea.items()
+        )
 
     def _materialize_flow_targets(self) -> None:
         """Attach branch-target code outside ``afbj`` block coverage.
@@ -1476,6 +1574,12 @@ class R2BinaryCache:
         for func_ea in list(self.func_blocks):
             blocks = self.func_blocks[func_ea]
             raw_starts = {int(b["addr"]) for b in blocks}
+            covered_heads = {
+                head
+                for b in blocks
+                if not b.get("materialized")
+                for head in (b.get("instrs") or ())
+            }
             targets = {
                 int(b[key])
                 for b in blocks
@@ -1483,10 +1587,32 @@ class R2BinaryCache:
                 if b.get(key) is not None
             } - raw_starts
             boundaries = targets | raw_starts | set(self.functions)
+            raw_spans = sorted(
+                (
+                    int(b["addr"]),
+                    int(b["addr"]) + max(int(b.get("size") or 0), 1),
+                )
+                for b in blocks
+                if not b.get("materialized")
+            )
+            span_starts = [span[0] for span in raw_spans]
+
+            def in_raw_span(address: int) -> bool:
+                index = bisect.bisect_right(span_starts, address) - 1
+                return (
+                    index >= 0
+                    and raw_spans[index][0] <= address < raw_spans[index][1]
+                )
+
             additions = []
             covered_targets = set()
             for target in sorted(targets):
                 if target in self.functions or target in covered_targets:
+                    continue
+                if target in covered_heads or in_raw_span(target):
+                    # The jump lands inside a block this function already
+                    # owns; FlowChart splits the block at the target
+                    # instead of re-owning its heads.
                     continue
                 if (
                     self.insns.get(target) is None
@@ -1517,6 +1643,7 @@ class R2BinaryCache:
                         insn is None
                         or not self._is_executable(cursor)
                         or (cursor in boundaries and cursor != seg_start)
+                        or (cursor in covered_heads and cursor != seg_start)
                     ):
                         break
                     itype = insn.get("type") or ""
@@ -1535,6 +1662,16 @@ class R2BinaryCache:
                         additions.append((seg_start, cursor, None, cursor))
                         covered_targets.add(seg_start)
                         seg_start = cursor
+                        if (
+                            cursor in raw_starts
+                            or cursor in self.functions
+                            or cursor in covered_heads
+                        ):
+                            # The run lands on an analysed block start, a
+                            # function entry, or a head this function owns:
+                            # it is already covered; do not materialize a
+                            # duplicate.
+                            break
                 if cursor > seg_start:
                     additions.append((seg_start, cursor, None, cursor))
                     covered_targets.add(seg_start)
@@ -1698,6 +1835,37 @@ class R2BinaryCache:
                             instrs.append(off)
                             instrs.sort()
 
+    def _collect_dead_heads(self) -> set:
+        """Heads clipped out by the flow-barrier model: never IDA FuncItems.
+
+        ``afbj`` blocks keep dead padding behind ``jmp``/``ret``/noreturn
+        calls in their ``instrs`` list; IDA align-izes those bytes so they
+        are not heads and carry no flow xrefs.  A head that stays live in
+        any other block keeps its refs (shared epilogue ownership).
+        """
+        dead: set = set()
+        live: set = set()
+        for func_ea, blocks in self.func_blocks.items():
+            info = self.functions.get(func_ea) or {}
+            func_end = func_ea + int(info.get("size") or 0)
+            for block in blocks:
+                addr = int(block.get("addr") or 0)
+                instrs = block.get("instrs") or ()
+                size = int(block.get("size") or 0)
+                if size:
+                    end = addr + size
+                elif instrs:
+                    tail = self.insns.get(instrs[-1]) or {}
+                    end = int(instrs[-1]) + int(tail.get("size") or 1)
+                else:
+                    continue
+                limit = self.truncate_block_end(
+                    addr, end, func_end or end
+                )
+                for head in instrs:
+                    (dead if head >= limit else live).add(head)
+        return dead - live
+
     def _register_insn_refs(self) -> None:
         """Create code/data xrefs from every decoded instruction operand.
 
@@ -1712,7 +1880,7 @@ class R2BinaryCache:
                 target = _int_or_none(insn.get("jump")) or _int_or_none(
                     insn.get("ptr")
                 )
-                if target is not None:
+                if target:
                     refs = self.code_refs_from.setdefault(ea, [])
                     if target not in refs:
                         refs.append(target)
@@ -1723,7 +1891,7 @@ class R2BinaryCache:
                 target = _int_or_none(insn.get("jump")) or _int_or_none(
                     insn.get("ptr")
                 )
-                if target is None:
+                if not target:
                     continue
                 if self._is_executable(target):
                     refs = self.code_refs_from.setdefault(ea, [])
@@ -1740,6 +1908,7 @@ class R2BinaryCache:
                     if ea not in back:
                         back.append(ea)
         self._register_continuation_refs()
+        self._register_reg_indirect_refs()
 
     def _register_continuation_refs(self) -> None:
         """MSVC funclet epilogues do ``lea reg, [target]; ret`` to resume the
@@ -1776,6 +1945,87 @@ class R2BinaryCache:
                     if itype in _TERMINAL_TYPES or itype in _CALL_TYPES:
                         break
 
+    def _register_reg_indirect_refs(self) -> None:
+        """Register-resolved call/jump xrefs, matching IDA's tracking.
+
+        IDA's analyzer follows ``mov reg, [__imp_X]``/``lea reg, [x]``
+        loads and records a code xref from ``call reg``/``jmp reg`` (and
+        ``call qword [reg]``) to the loaded address; radare2 leaves such
+        transfers targetless.  A linear pass over each function's
+        instructions tracks the last static value written to each
+        register.
+        """
+        for blocks in self.func_blocks.values():
+            heads = sorted(
+                {head for b in blocks for head in (b.get("instrs") or ())}
+            )
+            reg_state: Dict[str, int] = {}
+            for head in heads:
+                insn = self.insns.get(head)
+                if insn is None:
+                    continue
+                itype = insn.get("type") or ""
+                text = (insn.get("disasm") or "").strip()
+                operand = text.split(None, 1)[1] if " " in text else ""
+                if itype in (
+                    "rcall",
+                    "rjmp",
+                    "ujmp",
+                    "ircall",
+                    "irjmp",
+                    "rcjmp",
+                    "ucjmp",
+                ):
+                    reg = _first_reg(operand)
+                    target = reg_state.get(reg) if reg else None
+                    if target is not None:
+                        refs = self.code_refs_from.setdefault(head, [])
+                        if target not in refs:
+                            refs.append(target)
+                        back = self.code_refs_to.setdefault(target, [])
+                        if head not in back:
+                            back.append(head)
+                    # A call clobbers caller-saved state only at runtime;
+                    # keep the register map for simplicity - IDA resolves
+                    # against the last dominating write.
+                dst = _dst_reg(operand)
+                if dst is None:
+                    continue
+                if itype in ("mov", "movabs", "movzx", "movsxd", "lea", "xchg"):
+                    value = self._reg_load_value(insn, operand, reg_state)
+                    if value is not None:
+                        reg_state[dst] = value
+                    else:
+                        reg_state.pop(dst, None)
+                else:
+                    reg_state.pop(dst, None)
+
+    def _reg_load_value(
+        self, insn: dict, operand_text: str, reg_state: Dict[str, int]
+    ) -> Optional[int]:
+        """Static value a ``mov``/``lea`` writes to its destination."""
+        parts = operand_text.split(",", 1)
+        if len(parts) != 2:
+            return None
+        source = parts[1].strip()
+        ops = insn.get("ops") or []
+        if "[" in source:
+            # Memory operand: the effective address (e.g. an IAT slot).
+            for operand in ops[1:]:
+                addr = _int_or_none(operand.get("addr")) or _int_or_none(
+                    operand.get("value")
+                )
+                if addr and self.is_mapped(addr):
+                    return addr
+            return None
+        reg = _first_reg(source)
+        if reg is not None:
+            return reg_state.get(reg)
+        imm = _int_or_none(source)
+        if imm is not None and self.is_mapped(imm):
+            return imm
+        return None
+
     def _operand_code_va(self, insn: dict) -> Optional[int]:
         """Immediate/mem operand of ``insn`` that points at executable code."""
         for op in insn.get("ops") or ():
@@ -1783,6 +2033,175 @@ class R2BinaryCache:
             if value is not None and self._is_executable(value):
                 return value
         return None
+
+    def _recover_switches(self) -> None:
+        """Resolve indirect-jump switch tables like IDA's switch engine.
+
+        ``afbj`` never reports the case-target fan-out of a ``jmp reg``
+        dispatch; IDA's flow chart emits one edge per distinct target and
+        ``extract_function_switches`` stores ``[jtable_size, case_ids]``.
+        The MSVC x64 dispatch is a dword-offset table: a ``lea`` loads the
+        base, an indexed dword fetch reads a signed offset, and ``add``
+        turns it into the target.  Reading entries while they stay
+        executable and inside the function's block span recovers the
+        table; the ``sub r32, low`` + ``cmp r32, size-1; ja`` guard before
+        the dispatch gives the raw case values IDA stores.
+        """
+        for func_ea, blocks in self.func_blocks.items():
+            func_insns = sorted(
+                head for block in blocks for head in block.get("instrs", ())
+            )
+            if not func_insns:
+                continue
+            span_lo = min(int(block["addr"]) for block in blocks)
+            span_hi = max(
+                int(block["addr"]) + max(int(block.get("size") or 0), 1)
+                for block in blocks
+            )
+            for block in blocks:
+                instrs = block.get("instrs") or ()
+                if not instrs:
+                    continue
+                tail_ea = int(instrs[-1])
+                tail = self.insns.get(tail_ea) or {}
+                if (tail.get("type") or "") not in _INDIRECT_JMP_TYPES:
+                    continue
+                recovered = self._resolve_switch(
+                    func_insns, instrs, tail_ea, span_lo, span_hi
+                )
+                if recovered is not None:
+                    self.switches_by_insn[tail_ea] = recovered
+
+    def _resolve_switch(
+        self,
+        func_insns: List[int],
+        block_instrs,
+        tail_ea: int,
+        span_lo: int,
+        span_hi: int,
+    ) -> Optional[Tuple[int, List[int], List[int]]]:
+        """Decode the jump table feeding an indirect dispatch tail."""
+        candidates: List[int] = []
+        for head in block_instrs:
+            insn = self.insns.get(head) or {}
+            if (insn.get("mnemonic") or "") != "lea":
+                continue
+            match = _ABS_MEM_RE.search(insn.get("disasm") or "")
+            if match is None:
+                continue
+            base = int(match.group(1), 16)
+            if (
+                base not in candidates
+                and self.is_mapped(base)
+                and not self._is_executable(base)
+            ):
+                candidates.append(base)
+        if not candidates:
+            return None
+        low, bound = self._switch_bounds(func_insns, tail_ea)
+        for base in reversed(candidates):
+            targets: List[int] = []
+            for index in range(_SWITCH_MAX_ENTRIES):
+                raw = self.get_bytes(base + index * 4, 4)
+                if len(raw) < 4:
+                    break
+                offset = int.from_bytes(raw, "little", signed=True)
+                target = (base + offset) & 0xFFFFFFFFFFFFFFFF
+                if not (
+                    span_lo <= target < span_hi and self._is_executable(target)
+                ):
+                    break
+                targets.append(target)
+            if not targets:
+                continue
+            # A range guard caps the table shorter than the span scan;
+            # extra span-valid entries beyond it belong to later data.
+            size = bound if bound is not None else len(targets)
+            if size > len(targets):
+                continue
+            # IDA attaches a data xref to the indexed table fetch
+            # (``mov eax, dword [rdx + rax]``) resolving it to the table
+            # base; radare2 only sees an unresolvable indexed load.
+            load_ea = self._switch_load_insn(block_instrs, tail_ea)
+            if load_ea is not None:
+                refs = self.data_refs_from.setdefault(load_ea, [])
+                if base not in refs:
+                    refs.append(base)
+                back = self.data_refs_to.setdefault(base, [])
+                if load_ea not in back:
+                    back.append(load_ea)
+            # The table region is a dword array item: no string literal
+            # starts inside it no matter how printable the offsets look.
+            self.switch_table_ranges.append(
+                (base, base + size * 4)
+            )
+            return size, list(range(low, low + size)), targets[:size]
+        return None
+
+    def _switch_load_insn(
+        self, block_instrs, tail_ea: int
+    ) -> Optional[int]:
+        """The indexed dword fetch feeding a switch dispatch, if present."""
+        load_ea = None
+        for head in block_instrs:
+            insn = self.insns.get(head) or {}
+            if (insn.get("mnemonic") or "") not in (
+                "mov",
+                "movsxd",
+                "movzx",
+                "movsx",
+            ):
+                continue
+            text = insn.get("disasm") or ""
+            operand = text.split(None, 1)[1] if " " in text else ""
+            if "+" not in operand or "[" not in operand:
+                continue
+            # ``mov eax, dword [rdx + rax]``: a two-register indexed load
+            # whose effective address is not statically resolvable.
+            mem = [
+                op
+                for op in (insn.get("ops") or [])
+                if op.get("type") in (2, 3, 4)
+            ]
+            if not mem or _int_or_none(mem[-1].get("addr")):
+                continue
+            load_ea = head
+        return load_ea
+
+    def _switch_bounds(
+        self, func_insns: List[int], tail_ea: int
+    ) -> Tuple[int, Optional[int]]:
+        """``switch`` low bound and table size from the dispatch guard."""
+        window = [
+            head for head in func_insns if head < tail_ea
+        ][-_SWITCH_BOUND_WINDOW:]
+        for i in range(len(window) - 1, 0, -1):
+            insn = self.insns.get(window[i]) or {}
+            if (insn.get("mnemonic") or "") != "cmp":
+                continue
+            match = _REG_IMM_RE.match((insn.get("disasm") or "").strip())
+            if match is None or match.group(1) != "cmp":
+                continue
+            follower = self.insns.get(window[i + 1]) or {}
+            if (follower.get("type") or "") != "cjmp":
+                continue
+            reg = match.group(2)
+            bound = int(match.group(3), 0) + 1
+            low = 0
+            for j in range(i - 1, -1, -1):
+                prev = self.insns.get(window[j]) or {}
+                match = _REG_IMM_RE.match((prev.get("disasm") or "").strip())
+                if match is None:
+                    continue
+                if match.group(1) == "cmp":
+                    break
+                if match.group(2) != reg:
+                    continue
+                if match.group(1) == "sub":
+                    low = int(match.group(3), 0)
+                break
+            return low, bound
+        return 0, None
 
     def _synthesize_funclets(self) -> None:
         """Create function records for ``.pdata`` ranges radare2 never made.
@@ -2077,6 +2496,16 @@ class R2BinaryCache:
         self.sorted_func_eas = sorted(self.functions)
         self._func_starts = list(self.sorted_func_eas)
 
+    def is_iat_thunk_func(self, ea: int) -> bool:
+        """True when the function at ``ea`` is a lone ``jmp [IAT]`` thunk."""
+        blocks = self.func_blocks.get(ea)
+        if not blocks or len(blocks) != 1:
+            return False
+        instrs = blocks[0].get("instrs") or ()
+        if len(instrs) != 1:
+            return False
+        return self._is_iat_thunk(self.insns.get(instrs[0]) or {})
+
     def _is_iat_thunk(self, insn: dict) -> bool:
         """True when ``insn`` is a lone ``jmp qword [IAT slot]`` thunk."""
         if (insn.get("type") or "") not in _JMP_TYPES:
@@ -2091,6 +2520,170 @@ class R2BinaryCache:
             if lo <= target < hi:
                 return True
         return False
+
+    def func_noreturn(self, ea: int, seen: frozenset = frozenset()) -> bool:
+        """Return True when the function at ``ea`` can never return.
+
+        IDA sets ``FUNC_NORET`` by analysis; reproduce it transitively: a
+        function with no ``ret`` whose last flow transfer lands on a noreturn
+        target (named import, or another noreturn function) is noreturn.
+        """
+        memo = getattr(self, "_noreturn_memo", None)
+        if memo is None:
+            memo = self._noreturn_memo = {}
+        if ea in memo:
+            return memo[ea]
+        info = self.functions.get(ea)
+        result = False
+        computed = info is not None and ea not in seen
+        if computed:
+            seen = seen | {ea}
+            flow_insn = None
+            has_ret = False
+            for block in self.func_blocks.get(ea, ()):
+                for head in self.instruction_heads(
+                    int(block["addr"]), int(block["addr"]) + int(block["size"])
+                ):
+                    insn = self.insns.get(head)
+                    if insn is None:
+                        continue
+                    itype = insn.get("type") or ""
+                    if itype in ("ret", "iret", "rret"):
+                        has_ret = True
+                    elif itype in _CALL_TYPES or itype in _JMP_OUT_TYPES:
+                        flow_insn = insn
+                        if itype in _CALL_TYPES and self.noreturn_call(
+                            insn, seen
+                        ):
+                            # Code after a call that cannot return is dead; a
+                            # ``ret`` in it does not make the function
+                            # returning.
+                            break
+            if not has_ret and flow_insn is not None:
+                target = _int_or_none(flow_insn.get("jump")) or _int_or_none(
+                    flow_insn.get("ptr")
+                )
+                result = target is not None and (
+                    _is_noreturn_name(self.get_name(target))
+                    or _is_noreturn_name(self.get_true_name(target))
+                    or self.func_noreturn(target, seen)
+                )
+        if computed:
+            memo[ea] = result
+        return result
+
+    def noreturn_call(self, insn: dict, seen: frozenset = frozenset()) -> bool:
+        """True when a ``call`` instruction targets a noreturn callee."""
+        if (insn.get("type") or "") not in _CALL_TYPES:
+            return False
+        target = _int_or_none(insn.get("jump")) or _int_or_none(
+            insn.get("ptr")
+        )
+        if target is None:
+            return False
+        if self.is_iat_thunk_func(target):
+            # A call through a lone ``jmp [IAT]`` thunk returns in IDA's
+            # model: the thunk is not flagged FUNC_NORET so the call site
+            # keeps its fallthrough edge no matter which import it forwards
+            # to.
+            return False
+        return (
+            _is_noreturn_name(self.get_name(target))
+            or _is_noreturn_name(self.get_true_name(target))
+            or self.func_noreturn(target, seen)
+        )
+
+    def truncate_block_end(self, start: int, end: int, func_end: int) -> int:
+        """Clip a block's end after its first flow-barrier instruction.
+
+        radare2 folds dead padding into basic blocks (``int3``/``nop``
+        fillers after ``ret``/``jmp`` and after noreturn calls); IDA stops
+        the block at the barrier, so the padding is never a ``FuncItem``.
+        A padding tail is dropped only when every instruction after it
+        through the function's end is padding too: between live blocks a
+        ``nop`` is a real instruction IDA counts.
+        """
+        heads = self.instruction_heads(start, end)
+        limit = end
+
+        def _clip_barrier(insn: dict) -> bool:
+            return (insn.get("type") or "") in _STOP_FLOW_TYPES
+
+        def _pad_barrier(insn: dict) -> bool:
+            itype = insn.get("type") or ""
+            return itype in _STOP_FLOW_TYPES or (
+                itype in _CALL_TYPES and self.noreturn_call(insn)
+            )
+
+        pad_start = len(heads)
+        for index in range(len(heads) - 1, -1, -1):
+            insn = self.insns.get(heads[index])
+            if insn is not None and _is_padding_insn(insn):
+                pad_start = index
+            else:
+                break
+        if pad_start < len(heads):
+            # A pad run that reaches the function's end is dead tail
+            # ``align`` data - including an all-padding block: ``afbj``
+            # emits trailing ``0x90``/``int3`` runs as blocks IDA simply
+            # excludes from the function.  Otherwise pads stay heads while
+            # reachable - even ``0f 1f`` alignment nops - but after a flow
+            # barrier (jump, return, trap, noreturn call) only ``0x90``
+            # heads survive: ``int3``/invalid filler and ``0f 1f`` runs
+            # become ``align`` items in IDA.
+            pad_head = heads[pad_start]
+            run = heads[pad_start:]
+            prev = (
+                self.insns.get(heads[pad_start - 1]) or {}
+                if pad_start > 0
+                else {}
+            )
+            prev_barrier = _pad_barrier(prev) or (
+                (prev.get("type") or "") in _CALL_TYPES
+                and (self.insns.get(run[0]) or {}).get("type") == "trap"
+            )
+            dead_tail = all(
+                _is_padding_insn(self.insns.get(head) or {})
+                for head in self.instruction_heads(pad_head, func_end)
+            )
+            if dead_tail:
+                limit = pad_head
+            else:
+                for head in run:
+                    insn = self.insns.get(head) or {}
+                    if _is_dead_pad(insn) or (
+                        prev_barrier and not _is_nop_insn(insn)
+                    ):
+                        limit = head
+                        break
+        for index, head in enumerate(heads):
+            insn = self.insns.get(head)
+            if insn is None:
+                continue
+            itype = insn.get("type") or ""
+            stop = _clip_barrier(insn)
+            if itype in _CALL_TYPES and index + 1 < len(heads):
+                nxt = self.insns.get(heads[index + 1])
+                if nxt is not None and (nxt.get("type") or "") == "trap":
+                    stop = True
+            if not stop:
+                continue
+            flow_end = head + int(insn.get("size") or 0)
+            # The unreachable padding run after a barrier is one ``align``
+            # item; only a lone ``0x90`` remains a real head.
+            tail_end = flow_end
+            pads = []
+            for tail_head in heads[index + 1 :]:
+                tail_insn = self.insns.get(tail_head)
+                if tail_insn is None or not _is_padding_insn(tail_insn):
+                    break
+                pads.append(tail_head)
+            if len(pads) == 1 and _is_nop_insn(self.insns.get(pads[0]) or {}):
+                tail_end = pads[0] + int(
+                    (self.insns.get(pads[0]) or {}).get("size") or 1
+                )
+            return min(tail_end, limit)
+        return limit
 
     def _emit_gap_function(self, run: List[dict]) -> None:
         """Register ``run`` as a function when it ends in a terminal."""
@@ -2353,6 +2946,58 @@ def _build_decompilation(section: str, resolve_name=None) -> dict:
         "ast": ast_nodes,
         "ok": prototype is not None,
     }
+
+
+_REG_TOKEN = re.compile(
+    r"\b(r\d{1,2}[dwb]?|[re][abcd]x|[re][sd]i|[re][sb]p|rip|eip|"
+    r"[abcd][lxh]|sil|dil|bpl|spl)\b"
+)
+
+_REG64 = {
+    "eax": "rax", "ebx": "rbx", "ecx": "rcx", "edx": "rdx",
+    "esi": "rsi", "edi": "rdi", "esp": "rsp", "ebp": "rbp",
+    "ax": "rax", "bx": "rbx", "cx": "rcx", "dx": "rdx",
+    "si": "rsi", "di": "rdi", "sp": "rsp", "bp": "rbp",
+    "al": "rax", "bl": "rbx", "cl": "rcx", "dl": "rdx",
+    "ah": "rax", "bh": "rbx", "ch": "rcx", "dh": "rdx",
+    "sil": "rsi", "dil": "rdi", "bpl": "rbp", "spl": "rsp",
+}
+
+
+def _reg64(name: str) -> str:
+    """Normalize a register spelling to its 64-bit form (``r12d``→``r12``)."""
+    base = (name or "").lower()
+    if base in _REG64:
+        return _REG64[base]
+    match = re.fullmatch(r"r(\d{1,2})[dwb]?", base)
+    if match:
+        return "r" + match.group(1)
+    return base
+
+
+def _first_reg(operand_text: str) -> Optional[str]:
+    """First register name inside an operand expression, normalized.
+
+    For ``[expr]`` operands only the bracketed expression is scanned, so
+    ``sym.imp.*`` names cannot alias register spellings.
+    """
+    text = operand_text or ""
+    if "[" in text:
+        text = text[text.index("[") + 1 : text.rindex("]")]
+    for match in _REG_TOKEN.finditer(text):
+        reg = match.group(1)
+        if reg in ("rip", "eip"):
+            continue
+        return _reg64(reg)
+    return None
+
+
+def _dst_reg(operand_text: str) -> Optional[str]:
+    """Destination register of an instruction, when operand 0 is a bare reg."""
+    first = (operand_text or "").split(",", 1)[0].strip()
+    if _REG_TOKEN.fullmatch(first):
+        return _reg64(first)
+    return None
 
 
 def _is_padding_insn(instruction: dict) -> bool:
