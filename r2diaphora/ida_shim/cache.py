@@ -356,7 +356,8 @@ def parse_eh_boundaries(
 
     pdata = pe.section(".pdata")
     if pdata is None or not pdata["size"]:
-        return boundaries, funclets
+        # PE32 has no ``.pdata`` unwind table.
+        return boundaries, funclets, catch_funclets, transitions
     poff = pdata["paddr"]
     base = pe.image_base
     count = pdata["size"] // 12

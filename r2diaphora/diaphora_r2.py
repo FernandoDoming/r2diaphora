@@ -191,9 +191,30 @@ def _collect_results(bindiff: Any) -> List[dict]:
     results: List[dict] = []
     for chooser_name in _CHOOSER_KEYS:
         chooser = getattr(bindiff, f"{chooser_name}_chooser", None)
-        if chooser is None:
+        chooser_items = getattr(chooser, "items", ()) if chooser is not None else ()
+        if not chooser_items:
+            # Aborted diff: choosers were never filled; fall back to the
+            # incremental match store, whose rows are
+            # [ea, name1, ea2, name2, description, ratio, nodes1, nodes2]
+            for match in getattr(bindiff, "all_matches", {}).get(chooser_name, ()):
+                results.append(
+                    {
+                        "type": chooser_name,
+                        "line": 0,
+                        "address": match[0],
+                        "name": match[1],
+                        "address2": match[2],
+                        "name2": match[3],
+                        "description": match[4],
+                        "ratio": match[5],
+                        "nodes1": match[6],
+                        "nodes2": match[7],
+                        "bb1": match[6],
+                        "bb2": match[7],
+                    }
+                )
             continue
-        for row in chooser.items:
+        for row in chooser_items:
             # CChooser.add_item row layout:
             # [index, ea, name, ea2, name2, ratio, nodes1, nodes2, description]
             results.append(
@@ -239,7 +260,23 @@ def compare_dbs(
     try:
         for key, value in diff_opts.items():
             setattr(bindiff, key, value)
-        bindiff.diff(db2)
+        try:
+            bindiff.diff(db2)
+        except SystemExit:
+            # Upstream aborts the whole diff with ``SystemExit`` when one
+            # heuristic exceeds its row/time budget - on large binaries
+            # 'Related compilation unit' alone produces millions of
+            # candidate pairs.  Run the final pass ourselves so the matches
+            # collected so far are cleaned up and reach the choosers.
+            print(
+                "[Diaphora] heuristic budget exceeded; "
+                "returning partial results",
+                file=sys.stderr,
+            )
+            try:
+                bindiff.final_pass()
+            except Exception:
+                pass
         matches = _collect_results(bindiff)
     finally:
         try:
