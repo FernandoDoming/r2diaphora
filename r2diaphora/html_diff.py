@@ -159,11 +159,25 @@ class HtmlResults:
     def _changes(left: Optional[str], right: Optional[str]) -> List[dict]:
         if not left or not right:
             return []
-        parser = DifflibParser(
-            [f"{line}\n" for line in left.split("\n")],
-            [f"{line}\n" for line in right.split("\n")],
-        )
-        return list(parser)
+        try:
+            parser = DifflibParser(
+                [f"{line}\n" for line in left.split("\n")],
+                [f"{line}\n" for line in right.split("\n")],
+            )
+            return list(parser)
+        except RecursionError:
+            # ``difflib`` can exceed the recursion limit on inputs with very
+            # long repeated-line runs (large generated pseudocode).  Emit an
+            # unaligned side-by-side so the function text stays visible.
+            changes = [
+                {"code": DiffCode.LEFTONLY, "line": f"{line}\n", "newline": ""}
+                for line in left.split("\n")
+            ]
+            changes += [
+                {"code": DiffCode.RIGHTONLY, "line": f"{line}\n", "newline": ""}
+                for line in right.split("\n")
+            ]
+            return changes
 
     def _render_side(self, doc, tag, text, changes: List[dict], side: int) -> None:
         for change in changes:
