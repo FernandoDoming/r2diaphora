@@ -37,20 +37,39 @@ per-instruction IPC.
   pseudocode-primes hash, so it produces the strongest matching.
 - `pdc` (`-d pdc`) — radare2's built-in text decompiler, like the original
   r2diaphora port. Works without r2ghidra installed; pseudocode is
-  assembly-flavoured C and the pseudocode-primes hash covers fewer features.
+  assembly-flavoured C. The `pdct` region tree is parsed into hash material,
+  so pseudocode-prime hashes still discriminate (coarser than `pdgj`).
 - `-nd` — skip decompilation entirely.
+
+## Library and thunk recognition
+
+Like IDA's exporter, r2diaphora drops recognized library code and thunks from
+the export by default (`-a` keeps them):
+
+- **Thunks** (`FUNC_THUNK`) — single-instruction `jmp` functions targeting an
+  import slot, an import symbol, or another function (IDA's `j_` class). The
+  IAT span comes from the PE import directory, falling back to the
+  `sym.imp.*`/`isj` slot addresses for linkers that leave the directory empty
+  (Borland/Delphi).
+- **Library code** (`FUNC_LIB`) — FLIRT signature matching via radare2's
+  `zfs`. If `dir.flirt` (populated by `r2pm -i sigdb` or manually dropped
+  `.sig` files) or the `R2DIA_FLIRT` env var provides signatures, matched
+  functions are marked library code and renamed to the library symbol name,
+  exactly like IDA. Without a sigdb nothing is marked. Note the community
+  sigdb ships MSVC/mingw/masm signatures but no Delphi RTL set — Delphi
+  FLIRT sigs must be supplied separately.
 
 ## Differences from IDA-produced databases
 
-r2diaphora exports tend to contain **more** functions than the IDA exporter on
-the same binary. IDA marks library/runtime code `FUNC_LIB` via FLIRT/Lumina
-signatures and one-instruction IAT jumps `FUNC_THUNK`; the Diaphora exporter
-drops both by default (`-a` keeps them). radare2 ships no equivalent signature
-database, so library functions stay in the export. On a 4 MB Borland Delphi
-sample, IDA found 3,854 functions but exported only ~663 after dropping 2,759
-`FUNC_LIB` + 432 `FUNC_THUNK`; radare2 exported ~5,000. The extra coverage is
-real code — mostly compiler RTL and import thunks — and diffs r2-vs-r2 well,
-but expect lower overlap when diffing an r2 export against an IDA export.
+Without a sigdb, r2diaphora exports tend to contain **more** functions than
+the IDA exporter on the same binary. IDA marks library/runtime code
+`FUNC_LIB` via FLIRT/Lumina signatures and one-instruction IAT jumps
+`FUNC_THUNK`; the Diaphora exporter drops both by default. On a 4 MB Borland
+Delphi sample, IDA found 3,854 functions but exported only ~663 after
+dropping 2,759 `FUNC_LIB` + 432 `FUNC_THUNK`. With matching sigdb coverage
+r2diaphora lands much closer; the residual difference is Delphi RTL
+signatures IDA ships and the community sigdb does not, plus ordinary
+analysis divergence.
 
 ## Performance
 

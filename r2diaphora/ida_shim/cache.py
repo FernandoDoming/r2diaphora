@@ -853,6 +853,8 @@ class R2BinaryCache:
         self._heads_cache: Dict[Tuple[int, int], List[int]] = {}
         self.decompiled: Dict[int, dict] = {}
         self.decompiler_available: Optional[bool] = None
+        self.import_addrs: set = set()
+        self.lib_func_eas: set = set()
         self._closed = False
         self._pdata_range_cache: Optional[List[Tuple[int, int]]] = None
 
@@ -1068,6 +1070,12 @@ class R2BinaryCache:
             for func_ea in chunk:
                 script.append("?e " + SECTION_PREFIX + "c:%x" % func_ea)
                 script.append("%s @ 0x%x" % (command, func_ea))
+                if use_pdc:
+                    # ``pdct`` dumps the structuring region AST; its node
+                    # kinds become the pseudocode-primes hash material that
+                    # plain ``pdc`` output cannot provide.
+                    script.append("?e " + SECTION_PREFIX + "t:%x" % func_ea)
+                    script.append("pdct @ 0x%x" % func_ea)
             return _split_sections(self._run_script(script))
 
         if workers <= 1:
@@ -1105,7 +1113,10 @@ class R2BinaryCache:
         for func_ea in targets:
             section = data.get("c:%x" % func_ea) or ""
             if use_pdc:
-                self.decompiled[func_ea] = _build_pdc_decompilation(section)
+                tree = data.get("t:%x" % func_ea) or ""
+                self.decompiled[func_ea] = _build_pdc_decompilation(
+                    section, tree
+                )
             else:
                 self.decompiled[func_ea] = _build_decompilation(
                     section, resolve_name
@@ -1207,8 +1218,63 @@ class R2BinaryCache:
         script.append("aaaa")
         return script
 
+    _DIR_FLIRT_CACHE: Optional[str] = None
+
+    def _dir_flirt(self) -> str:
+        """Resolve radare2's ``dir.flirt`` sigdb location (cheap, cached)."""
+        cls = type(self)
+        if cls._DIR_FLIRT_CACHE is None:
+            cls._DIR_FLIRT_CACHE = ""
+            try:
+                proc = subprocess.run(
+                    [self.r2_bin, "-Nqc", "e dir.flirt", "-"],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                cls._DIR_FLIRT_CACHE = (proc.stdout or "").strip()
+            except Exception:
+                pass
+        return cls._DIR_FLIRT_CACHE
+
+    def _flirt_sig_files(self) -> List[str]:
+        """FLIRT ``.sig`` files to scan, when a sigdb is installed.
+
+        Sources: the ``R2DIA_FLIRT`` environment variable (a ``.sig`` file
+        or a directory scanned recursively) and radare2's own sigdb
+        directory (``dir.flirt``, populated by ``r2pm -i sigdb`` or by
+        dropping files in by hand).  Capped so a huge sigdb cannot make
+        analysis unbounded.
+        """
+        files: List[str] = []
+        env = os.environ.get("R2DIA_FLIRT", "").strip()
+        roots = [env] if env else []
+        flirt_dir = self._dir_flirt()
+        if flirt_dir:
+            roots.append(flirt_dir)
+        for root in roots:
+            if os.path.isfile(root):
+                if root.lower().endswith(".sig"):
+                    files.append(os.path.abspath(root))
+                continue
+            if not os.path.isdir(root):
+                continue
+            for base, _dirs, names in os.walk(root):
+                for name in names:
+                    if name.lower().endswith(".sig"):
+                        files.append(os.path.join(base, name))
+        # ``zfs`` takes the path unquoted and resolves it against the
+        # process CWD (despite the help text claiming dir.flirt), so emit
+        # absolute forward-slashed paths - r2 accepts them on Windows too.
+        return sorted(
+            os.path.abspath(path).replace(os.sep, "/") for path in files
+        )[:64]
+
     def _build(self) -> None:
         script = self._analysis_prefix()
+        if self.ident_libs:
+            for sig in self._flirt_sig_files():
+                script.append("zfs " + sig)
 
         sections: List[Tuple[str, str]] = [
             ("info", "ij"),
@@ -1239,6 +1305,7 @@ class R2BinaryCache:
         self._parse_strings(_parse_json(data.get("strings")))
         self._parse_comments(_parse_json(data.get("comments")))
         self._parse_flags(_parse_json(data.get("flags")))
+        self._synthesize_iat_range()
         self._parse_callgraph(_parse_json_stream(data.get("callgraph")))
         if self.pe is None:
             self._load_r2_memory()
@@ -1400,7 +1467,20 @@ class R2BinaryCache:
             except (TypeError, ValueError):
                 continue
             if address:
+                self.import_addrs.add(address)
                 self.names.setdefault(address, (name, name, None))
+
+    def _synthesize_iat_range(self) -> None:
+        if (
+            self.import_addrs
+            and self.pe is not None
+            and not self.pe.iat_ranges
+        ):
+            # Borland/Delphi linkers leave the IAT data directory empty;
+            # the import table still exists and ``sym.imp.*`` slot
+            # addresses are the effective IAT span.
+            lo, hi = min(self.import_addrs), max(self.import_addrs)
+            self.pe.iat_ranges.append((lo, hi + max(self.bits // 8, 4)))
 
     def _parse_strings(self, strings: Optional[List[dict]]) -> None:
         self.strings_by_ea = {}
@@ -1448,6 +1528,10 @@ class R2BinaryCache:
             name = entry.get("name") or ""
             if not name:
                 continue
+            if name.startswith(("sym.imp.", "imp.")):
+                # Import slot flags carry the IAT address even when ``isj``
+                # reports no plt/got (Borland/Delphi import tables).
+                self.import_addrs.add(address)
             # ``try.N.<func>.{from,to,filter,catch}`` flags carry the structured
             # exception-handling ranges radare2 recovered from PE .pdata.  IDA
             # models these as basic-block boundaries plus an edge to the filter
@@ -1458,6 +1542,27 @@ class R2BinaryCache:
                 func_ea = int(match.group(2), 16)
                 regions = self.try_regions.setdefault(func_ea, {})
                 regions.setdefault(region_index, {})[match.group(3)] = address
+                continue
+            if name.startswith(("flirt.", "sign.")):
+                # FLIRT/zignature hits: the function is recognized library
+                # code, like IDA's FUNC_LIB.  FLIRT flag names carry the
+                # library symbol, so promote it when nothing better named
+                # the function; zignature names embed the local function
+                # name instead and are only used for the FUNC_LIB mark.
+                self.lib_func_eas.add(address)
+                if name.startswith("flirt."):
+                    lib_name = name[6:]
+                    # r2 deduplicates collisions as ``_<hexaddr>``
+                    stem, _, suffix = lib_name.rpartition("_")
+                    if suffix and stem:
+                        try:
+                            if int(suffix, 16) == address:
+                                lib_name = stem
+                        except ValueError:
+                            pass
+                    existing = self.names.get(address)
+                    if existing is None or existing[0].startswith("sub_"):
+                        self.names[address] = (lib_name, name, None)
                 continue
             normalized = _normalize_name(name)
             if not normalized:
@@ -3046,14 +3151,56 @@ def _build_decompilation(section: str, resolve_name=None) -> dict:
     }
 
 
-def _build_pdc_decompilation(section: str) -> dict:
+#: ``pdct`` region node kinds mapped to small stable op codes.  They feed
+#: the pseudocode-primes hash exactly like the ``pdgj`` p-code op numbers
+#: do, giving the ``pdc`` path real (if coarser) hash material.
+_PDCT_NODE_OPS = {
+    "seq": 1,
+    "bb": 2,
+    "if": 3,
+    "if-else": 4,
+    "else": 5,
+    "while": 6,
+    "do-while": 7,
+    "loop": 8,
+    "for": 9,
+    "switch": 10,
+    "case": 11,
+    "default": 12,
+    "goto": 13,
+    "continue": 14,
+    "break": 15,
+    "return": 16,
+    "cond": 17,
+    "try": 18,
+    "call": 19,
+    "tail": 20,
+}
+_PDCT_UNKNOWN_OP = 40
+_PDCT_NODE_RE = re.compile(r"^\s*([A-Za-z_-]+)\s+0x[0-9a-fA-F]+")
+
+
+def _pdct_ast(section: str) -> List[int]:
+    """Parse a ``pdct`` region-tree dump into a flat op sequence."""
+    ops = []
+    for line in strip_ansi(section).splitlines():
+        match = _PDCT_NODE_RE.match(line)
+        if match:
+            ops.append(
+                _PDCT_NODE_OPS.get(match.group(1).lower(), _PDCT_UNKNOWN_OP)
+            )
+    return ops
+
+
+def _build_pdc_decompilation(section: str, tree_section: str = "") -> dict:
     """Turn one ``pdc`` text block into the shape upstream expects.
 
     ``pdc`` is radare2's built-in decompiler: plain C-like text with no
-    JSON, no annotations and no p-code.  Lines are normalized with
+    JSON or annotations.  Lines are normalized with
     ``clean_r2_pseudocode_line`` (the same renames the original port
-    applied) and ``ast`` stays empty, so pseudocode-prime hashes cover
-    fewer features than the ``pdgj`` path.
+    applied).  ``tree_section`` carries the ``pdct`` region-tree dump,
+    whose node kinds become the ``ast`` hash material — coarser than the
+    ``pdgj`` p-code ops but far better than hashing nothing.
     """
     cleaned = strip_ansi(section)
     lines = [
@@ -3068,7 +3215,7 @@ def _build_pdc_decompilation(section: str) -> dict:
     return {
         "prototype": prototype,
         "lines": body,
-        "ast": [],
+        "ast": _pdct_ast(tree_section),
         "ok": prototype is not None,
     }
 

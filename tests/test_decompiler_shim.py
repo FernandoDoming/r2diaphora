@@ -100,12 +100,21 @@ def test_build_pdc_decompilation_parses_text_output():
         "    return 0;\n"
         "}\n"
     )
-    entry = _build_pdc_decompilation(section)
+    tree = (
+        "seq 0x140002000\n"
+        "  bb 0x140002000\n"
+        "  if 0x140002010\n"
+        "    bb 0x140002020\n"
+        "  return 0x140002030\n"
+    )
+    entry = _build_pdc_decompilation(section, tree)
     assert entry["ok"] is True
     assert entry["prototype"] == "function sub_140002000 () {"
     assert "    dll_GetVersion();" in entry["lines"]
-    # pdc provides no p-code; the ast feeds no extra hash primes
-    assert entry["ast"] == []
+    # the pdct region tree feeds the primes hash: seq,bb,if,bb,return
+    assert entry["ast"] == [1, 2, 3, 2, 16]
+    # without a pdct dump the ast just stays empty
+    assert _build_pdc_decompilation(section)["ast"] == []
     assert _build_pdc_decompilation("   \n\n")["ok"] is False
 
 

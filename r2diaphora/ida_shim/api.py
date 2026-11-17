@@ -271,7 +271,12 @@ def get_prev_func(ea: int) -> int:
     return cache.sorted_func_eas[index]
 
 
-_THUNK_JUMP_TYPES = {"jmp", "ujmp", "cjmp", "rjmp", "irjmp", "rcjmp", "ucjmp"}
+_THUNK_JUMP_TYPES = {
+    "jmp", "ujmp", "cjmp", "rjmp", "irjmp", "rcjmp", "ucjmp",
+    # ``mjmp``/``cmjmp`` = jump through a memory operand, the encoding
+    # Delphi linkers emit for import stubs (``jmp dword [sym.imp.X]``).
+    "mjmp", "cmjmp",
+}
 
 
 def _function_flags(func) -> int:
@@ -280,15 +285,23 @@ def _function_flags(func) -> int:
     ``FUNC_NORET``: reproduced transitively from the function's terminal
     flow transfer (named noreturn import or another noreturn function).
 
-    ``FUNC_THUNK``: a single-instruction function that jumps through an IAT
-    slot (``jmp qword [imp._XcptFilter]``).  Upstream's
-    ``exclude_library_thunk`` then drops it, matching IDA, which keeps such
-    entries out of its function list - unless a real symbol name elevates
-    them to an ordinary function (e.g. whoami.exe's wcstok stub, an
-    IDA-knowledge residual we cannot reproduce).  ``FUNC_LIB`` requires
-    FLIRT signatures radare2 does not ship."""
+    ``FUNC_THUNK``: a single-instruction jump to an import slot
+    (``jmp [imp.X]``, including binaries whose PE IAT directory is empty,
+    such as Borland/Delphi images) or a tail jump to another function -
+    IDA's ``j_`` thunk class.  Upstream's ``exclude_library_thunk`` then
+    drops it, matching IDA, which keeps such entries out of its function
+    list - unless a real symbol name elevates them to an ordinary function
+    (e.g. whoami.exe's wcstok stub, an IDA-knowledge residual we cannot
+    reproduce).
+
+    ``FUNC_LIB``: the function's start was matched by a FLIRT signature
+    scan (``zfs`` against ``dir.flirt`` or ``R2DIA_FLIRT``) or a loaded
+    zignature.  When no sigdb is installed nothing is marked, exactly as
+    before."""
     cache = _cache()
     flags = 0
+    if func.start_ea in getattr(cache, "lib_func_eas", ()):
+        flags |= FUNC_LIB
     if _func_noreturn(cache, func.start_ea, frozenset()):
         flags |= FUNC_NORET
     body = [
@@ -310,8 +323,11 @@ def _function_flags(func) -> int:
         return flags
     for lo, hi in getattr(cache.pe, "iat_ranges", ()):
         if lo <= target < hi:
-            flags |= FUNC_THUNK
-            break
+            return flags | FUNC_THUNK
+    if target in getattr(cache, "import_addrs", ()):
+        return flags | FUNC_THUNK
+    if target in cache.functions and target != func.start_ea:
+        return flags | FUNC_THUNK
     return flags
 
 
