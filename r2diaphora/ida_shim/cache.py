@@ -1044,10 +1044,14 @@ class R2BinaryCache:
     def decompile_all(self, func_eas: Optional[List[int]] = None) -> None:
         """Decompile every function and cache the results.
 
-        ``pdgj`` is issued for all functions inside one radare2 process,
-        which is the dominant pipeline cost on large binaries (~85ms per
-        function).  Each worker process is independent, so the target
-        list is split into contiguous chunks decompiled in parallel.
+        The decompiler command is issued for all functions inside one
+        radare2 process, which is the dominant pipeline cost on large
+        binaries (~85ms per function).  Each worker process is
+        independent, so the target list is split into contiguous chunks
+        decompiled in parallel.  ``decompiler_cmd`` selects the backend:
+        ``pdg`` uses the r2ghidra ``pdgj`` JSON form (p-code ops feed the
+        pseudocode-primes hash); ``pdc`` uses radare2's built-in text
+        decompiler like the original r2diaphora port.
         """
         if self.decompiler_available is False:
             return
@@ -1056,12 +1060,14 @@ class R2BinaryCache:
             return
 
         workers = self._decompile_workers(len(targets))
+        use_pdc = self.decompiler_cmd == "pdc"
+        command = "pdc" if use_pdc else "pdgj"
 
         def run_chunk(chunk: List[int]) -> Dict[str, str]:
             script = self._analysis_prefix()
             for func_ea in chunk:
                 script.append("?e " + SECTION_PREFIX + "c:%x" % func_ea)
-                script.append("pdgj @ 0x%x" % func_ea)
+                script.append("%s @ 0x%x" % (command, func_ea))
             return _split_sections(self._run_script(script))
 
         if workers <= 1:
@@ -1076,7 +1082,15 @@ class R2BinaryCache:
                 for part in pool.map(run_chunk, chunks):
                     data.update(part)
 
-        if all(
+        if use_pdc:
+            # ``pdc`` is a core command; treat "every section empty" as
+            # unavailable so callers can still disable the decompiler path.
+            self.decompiler_available = any(
+                (data.get("c:%x" % ea) or "").strip() for ea in targets
+            )
+            if not self.decompiler_available:
+                return
+        elif all(
             "You need to install the plugin" in (data.get("c:%x" % ea) or "")
             for ea in targets
         ):
@@ -1090,7 +1104,12 @@ class R2BinaryCache:
 
         for func_ea in targets:
             section = data.get("c:%x" % func_ea) or ""
-            self.decompiled[func_ea] = _build_decompilation(section, resolve_name)
+            if use_pdc:
+                self.decompiled[func_ea] = _build_pdc_decompilation(section)
+            else:
+                self.decompiled[func_ea] = _build_decompilation(
+                    section, resolve_name
+                )
 
     def _decompile_workers(self, target_count: int) -> int:
         """Worker count for parallel decompilation.
@@ -3023,6 +3042,33 @@ def _build_decompilation(section: str, resolve_name=None) -> dict:
         "prototype": prototype,
         "lines": body,
         "ast": ast_nodes,
+        "ok": prototype is not None,
+    }
+
+
+def _build_pdc_decompilation(section: str) -> dict:
+    """Turn one ``pdc`` text block into the shape upstream expects.
+
+    ``pdc`` is radare2's built-in decompiler: plain C-like text with no
+    JSON, no annotations and no p-code.  Lines are normalized with
+    ``clean_r2_pseudocode_line`` (the same renames the original port
+    applied) and ``ast`` stays empty, so pseudocode-prime hashes cover
+    fewer features than the ``pdgj`` path.
+    """
+    cleaned = strip_ansi(section)
+    lines = [
+        clean_r2_pseudocode_line(line).rstrip()
+        for line in cleaned.splitlines()
+    ]
+    lines = [line for line in lines if line.strip()]
+    lines = [line for line in lines if not line.lstrip().startswith("//")]
+
+    prototype = lines[0].strip() if lines else None
+    body = lines[1:] if len(lines) > 1 else []
+    return {
+        "prototype": prototype,
+        "lines": body,
+        "ast": [],
         "ok": prototype is not None,
     }
 

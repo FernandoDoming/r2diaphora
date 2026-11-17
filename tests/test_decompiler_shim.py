@@ -1,7 +1,11 @@
 import json
 
 from r2diaphora.ida_shim import ida_hexrays, state
-from r2diaphora.ida_shim.cache import R2BinaryCache, _build_decompilation
+from r2diaphora.ida_shim.cache import (
+    R2BinaryCache,
+    _build_decompilation,
+    _build_pdc_decompilation,
+)
 from r2diaphora.ida_shim.decompiler import decompile_with_r2
 from r2diaphora.upstream.jkutils.factor import primesbelow
 
@@ -86,6 +90,23 @@ def test_build_decompilation_without_resolver_keeps_raw_names():
     entry = _build_decompilation(json.dumps(doc))
     assert entry["ok"] is True
     assert entry["ast"] == [5]
+
+
+def test_build_pdc_decompilation_parses_text_output():
+    section = (
+        "// r2dec pseudo code output\n"
+        "function fcn.140002000 () {\n"
+        "    sym.imp.Kernel32.dll_GetVersion();\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    entry = _build_pdc_decompilation(section)
+    assert entry["ok"] is True
+    assert entry["prototype"] == "function sub_140002000 () {"
+    assert "    dll_GetVersion();" in entry["lines"]
+    # pdc provides no p-code; the ast feeds no extra hash primes
+    assert entry["ast"] == []
+    assert _build_pdc_decompilation("   \n\n")["ok"] is False
 
 
 def test_decompile_and_ast_visitor_on_calc_exe():
