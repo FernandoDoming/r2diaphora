@@ -51,6 +51,25 @@ def test_capstone_operand_layout_classifies_operand_types():
     assert layout[1]["type"] == 3  # o_phrase
 
 
+def test_parse_functions_reads_native_thunk_and_library_attrs():
+    cache = R2BinaryCache.__new__(R2BinaryCache)
+    cache.lib_func_eas = set()
+    cache.thunk_func_eas = set()
+    R2BinaryCache._parse_functions(
+        cache,
+        [
+            {"addr": 0x1000, "name": "main", "size": 16},
+            {"addr": 0x2000, "name": "stub", "size": 6, "thunk": True},
+            {"addr": 0x3000, "name": "libc_fn", "size": 8, "attrs": "TLS"},
+            {"addr": 0x4000, "name": "nore", "size": 4, "attrs": "N"},
+        ],
+    )
+    assert cache.thunk_func_eas == {0x2000}
+    # ``attrs`` letter ``L`` = library code; ``T`` alone does not mark FUNC_LIB
+    assert cache.lib_func_eas == {0x3000}
+    assert 0x4000 not in cache.lib_func_eas
+
+
 def test_r2_binary_cache_on_calc_exe():
     cache = R2BinaryCache(CALC, load_pdb=False)
     try:

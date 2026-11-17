@@ -24,6 +24,7 @@ class _StubCache:
         self.ref_targets_sorted = []
         self.names = {}
         self.pe = SimpleNamespace(iat_ranges=[])
+        self.thunk_func_eas = set()
 
     def is_switch_table(self, ea):
         return False

@@ -855,6 +855,7 @@ class R2BinaryCache:
         self.decompiler_available: Optional[bool] = None
         self.import_addrs: set = set()
         self.lib_func_eas: set = set()
+        self.thunk_func_eas: set = set()
         self._closed = False
         self._pdata_range_cache: Optional[List[Tuple[int, int]]] = None
 
@@ -1414,6 +1415,12 @@ class R2BinaryCache:
                 "calltype": entry.get("calltype", ""),
                 "stackframe": int(entry.get("stackframe") or 0),
             }
+            if entry.get("thunk"):
+                self.thunk_func_eas.add(ea)
+            # The ``attrs`` letter string ("TLS...") carries user-set and
+            # analysis-set function attributes; ``L`` = library code.
+            if "L" in (entry.get("attrs") or ""):
+                self.lib_func_eas.add(ea)
         self.sorted_func_eas = sorted(self.functions)
         self._func_starts = list(self.sorted_func_eas)
 
@@ -2698,7 +2705,14 @@ class R2BinaryCache:
         self._func_starts = list(self.sorted_func_eas)
 
     def is_iat_thunk_func(self, ea: int) -> bool:
-        """True when the function at ``ea`` is a lone ``jmp [IAT]`` thunk."""
+        """True when the function at ``ea`` forwards to another target.
+
+        Covers r2's native ``thunk`` attribute as well as the older
+        single-instruction ``jmp [IAT]`` shape kept for r2 builds that
+        predate it.
+        """
+        if ea in self.thunk_func_eas:
+            return True
         blocks = self.func_blocks.get(ea)
         if not blocks or len(blocks) != 1:
             return False

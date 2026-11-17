@@ -46,16 +46,18 @@ per-instruction IPC.
 Like IDA's exporter, r2diaphora drops recognized library code and thunks from
 the export by default (`-a` keeps them):
 
-- **Thunks** (`FUNC_THUNK`) — single-instruction `jmp` functions targeting an
-  import slot, an import symbol, or another function (IDA's `j_` class). The
-  IAT span comes from the PE import directory, falling back to the
-  `sym.imp.*`/`isj` slot addresses for linkers that leave the directory empty
-  (Borland/Delphi).
+- **Thunks** (`FUNC_THUNK`) — detected by radare2 itself: analysis marks
+  single-block jump stubs with the `thunk` function attribute (`aflj`
+  `"thunk": true`, `attrs` letter `T`, manageable via `afia`). This covers
+  PLT/import stubs, `jmp [IAT]` wrappers including Borland/Delphi `mjmp`
+  encodings, and tail-jump thunks without local heuristics. Requires an r2
+  build that detects thunks during analysis; older builds mark nothing.
 - **Library code** (`FUNC_LIB`) — FLIRT signature matching via radare2's
-  `zfs`. If `dir.flirt` (populated by `r2pm -i sigdb` or manually dropped
-  `.sig` files) or the `R2DIA_FLIRT` env var provides signatures, matched
-  functions are marked library code and renamed to the library symbol name,
-  exactly like IDA. Without a sigdb nothing is marked. Note the community
+  `zfs`, plus r2's `library` function attribute (`aflj` `attrs` letter `L`,
+  user-set via `afia+ library`). If `dir.flirt` (populated by
+  `r2pm -i sigdb` or manually dropped `.sig` files) or the `R2DIA_FLIRT` env
+  var provides signatures, matched functions are marked library code and
+  renamed to the library symbol name, exactly like IDA. Without a sigdb nothing is marked. Note the community
   sigdb ships MSVC/mingw/masm signatures but no Delphi RTL set — Delphi
   FLIRT sigs must be supplied separately.
 
