@@ -22,7 +22,75 @@ keeps working as-is and future Diaphora releases only need to be re-vendored.
 
 Exported databases use **SQLite by default** (`~/.r2diaphora/dbs/<sha256>.sqlite`)
 and are byte-compatible in schema with the ones produced by Diaphora inside IDA.
-MariaDB is still supported with `--db-backend mariadb`.
+MariaDB is still supported with `--db-backend mariadb`. Databases exported by
+either side can be diffed against each other — pass a `.sqlite` path as `file1`
+or `file2`.
+
+All radare2 analysis data is prefetched in bulk inside a single `r2` invocation
+per phase (analysis dump, then batch decompilation chunked across
+`min(4, cpu_count)` workers; `R2DIA_WORKERS` overrides). There is no
+per-instruction IPC.
+
+## Decompilers
+
+- `ghidra` (default) — r2ghidra `pdgj`. Its p-code ops feed the
+  pseudocode-primes hash, so it produces the strongest matching.
+- `pdc` (`-d pdc`) — radare2's built-in text decompiler, like the original
+  r2diaphora port. Works without r2ghidra installed; pseudocode is
+  assembly-flavoured C and the pseudocode-primes hash covers fewer features.
+- `-nd` — skip decompilation entirely.
+
+## Differences from IDA-produced databases
+
+r2diaphora exports tend to contain **more** functions than the IDA exporter on
+the same binary. IDA marks library/runtime code `FUNC_LIB` via FLIRT/Lumina
+signatures and one-instruction IAT jumps `FUNC_THUNK`; the Diaphora exporter
+drops both by default (`-a` keeps them). radare2 ships no equivalent signature
+database, so library functions stay in the export. On a 4 MB Borland Delphi
+sample, IDA found 3,854 functions but exported only ~663 after dropping 2,759
+`FUNC_LIB` + 432 `FUNC_THUNK`; radare2 exported ~5,000. The extra coverage is
+real code — mostly compiler RTL and import thunks — and diffs r2-vs-r2 well,
+but expect lower overlap when diffing an r2 export against an IDA export.
+
+## Performance
+
+Measured full-export wall-clock (r2 pipeline vs `idat -A` headless IDA export,
+Windows, benign System32 binaries):
+
+| Binary   | Functions | r2diaphora | IDA export |
+|----------|-----------|------------|------------|
+| whoami   | ~240      | 4.6 s      | 7.0 s      |
+| cmd      | ~990      | 20.0 s     | 18.2 s     |
+| conhost  | ~4,600    | 48.4 s     | 59.7 s     |
+| explorer | ~8,700    | 749 s      | 367 s      |
+
+Up to ~5K functions the port is at parity or faster. On larger binaries the
+remaining gap is upstream Diaphora's own export loop plus batch `pdgj`
+decompilation — `R2DIA_WORKERS=8` helps on wider machines.
+
+Known limits: the upstream *Related compilation unit* heuristic is quadratic
+in candidate pairs and hits the 5-minute `SQL_TIMEOUT_LIMIT` on 4 MB+,
+5K-function binaries; `compare_dbs` then returns the matches accumulated so
+far instead of dying. `pdgj` has ~0.5% run-to-run nondeterminism in
+register-name inference (an r2ghidra property, not a parallelism artifact).
+
+## Validation
+
+Tested against IDA Pro 9.5 exports on benign binaries and real malware samples
+(static analysis only — samples were never executed). Highlights:
+
+- Packed → Scylla-dumped twin: **829/829 (100%) best matches**, vs 52% for
+  the IDA-vs-IDA diff (IDA only exports ~200 functions from the packed file).
+- Same binary, IDA export vs r2 export: **zero wrong-address best matches**
+  on both a 32-bit and a 64-bit sample.
+- Field-level parity on x64 binaries is down to `kgh_hash`-only residuals
+  (IDA's typed struct-member data refs, which radare2 cannot reproduce).
+  32-bit binaries differ more (ESP frames, SEH, switch idioms).
+
+## Safety
+
+r2diaphora only ever opens samples for static reading through radare2. It
+never executes, emulates, or debugs target binaries.
 
 ## Setup
 
