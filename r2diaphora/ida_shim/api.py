@@ -274,15 +274,17 @@ def get_prev_func(ea: int) -> int:
 def _function_flags(func) -> int:
     """Approximate IDA's function flags.
 
-    ``FUNC_NORET``: reproduced transitively from the function's terminal
-    flow transfer (named noreturn import or another noreturn function).
+    ``FUNC_NORET``: seeded by r2's ``noreturn`` attribute (``attrs``
+    letter ``N``) and propagated transitively from the function's
+    terminal flow transfer (named noreturn import or another noreturn
+    function).
 
     ``FUNC_THUNK``: radare2's own analysis marks jump stubs with the
-    ``thunk`` function attribute (``aflj``/``afij`` ``"thunk": true``,
-    ``attrs`` letter ``T``).  Upstream's ``exclude_library_thunk`` then
-    drops them, matching IDA's ``j_`` thunk class.  Requires an r2 new
-    enough to detect thunks during analysis; older builds simply mark
-    nothing, as before.
+    ``thunk`` function attribute (``aflj`` ``attrs`` letter ``T``;
+    interim builds also exposed ``"thunk": true``).  Upstream's
+    ``exclude_library_thunk`` then drops them, matching IDA's ``j_``
+    thunk class.  Requires an r2 new enough to detect thunks during
+    analysis; older builds simply mark nothing, as before.
 
     ``FUNC_LIB``: the function's start was matched by a FLIRT signature
     scan (``zfs`` against ``dir.flirt`` or ``R2DIA_FLIRT``), a loaded

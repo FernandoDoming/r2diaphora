@@ -55,6 +55,7 @@ def test_parse_functions_reads_native_thunk_and_library_attrs():
     cache = R2BinaryCache.__new__(R2BinaryCache)
     cache.lib_func_eas = set()
     cache.thunk_func_eas = set()
+    cache.noret_func_eas = set()
     R2BinaryCache._parse_functions(
         cache,
         [
@@ -62,12 +63,14 @@ def test_parse_functions_reads_native_thunk_and_library_attrs():
             {"addr": 0x2000, "name": "stub", "size": 6, "thunk": True},
             {"addr": 0x3000, "name": "libc_fn", "size": 8, "attrs": "TLS"},
             {"addr": 0x4000, "name": "nore", "size": 4, "attrs": "N"},
+            {"addr": 0x5000, "name": "tailjmp", "size": 5, "attrs": "T"},
         ],
     )
-    assert cache.thunk_func_eas == {0x2000}
+    # ``thunk`` bool (old aflj) and ``attrs`` letter ``T`` (new aflj) both work
+    assert cache.thunk_func_eas == {0x2000, 0x3000, 0x5000}
     # ``attrs`` letter ``L`` = library code; ``T`` alone does not mark FUNC_LIB
     assert cache.lib_func_eas == {0x3000}
-    assert 0x4000 not in cache.lib_func_eas
+    assert cache.noret_func_eas == {0x4000}
 
 
 def test_r2_binary_cache_on_calc_exe():

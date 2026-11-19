@@ -856,6 +856,7 @@ class R2BinaryCache:
         self.import_addrs: set = set()
         self.lib_func_eas: set = set()
         self.thunk_func_eas: set = set()
+        self.noret_func_eas: set = set()
         self._closed = False
         self._pdata_range_cache: Optional[List[Tuple[int, int]]] = None
 
@@ -1415,12 +1416,16 @@ class R2BinaryCache:
                 "calltype": entry.get("calltype", ""),
                 "stackframe": int(entry.get("stackframe") or 0),
             }
-            if entry.get("thunk"):
+            # Function attributes: older builds expose ``thunk`` as a
+            # boolean, newer ones fold everything into the ``attrs``
+            # letter string ("TNLS...": N=noreturn, T=thunk, L=library).
+            attrs = entry.get("attrs") or ""
+            if entry.get("thunk") or "T" in attrs:
                 self.thunk_func_eas.add(ea)
-            # The ``attrs`` letter string ("TLS...") carries user-set and
-            # analysis-set function attributes; ``L`` = library code.
-            if "L" in (entry.get("attrs") or ""):
+            if "L" in attrs:
                 self.lib_func_eas.add(ea)
+            if "N" in attrs:
+                self.noret_func_eas.add(ea)
         self.sorted_func_eas = sorted(self.functions)
         self._func_starts = list(self.sorted_func_eas)
 
@@ -2748,6 +2753,9 @@ class R2BinaryCache:
             memo = self._noreturn_memo = {}
         if ea in memo:
             return memo[ea]
+        if ea in getattr(self, "noret_func_eas", ()):
+            memo[ea] = True
+            return True
         info = self.functions.get(ea)
         result = False
         computed = info is not None and ea not in seen
