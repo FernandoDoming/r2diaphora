@@ -179,6 +179,18 @@ def test_is_padding_insn():
     assert not _is_padding_insn({"type": "ret", "bytes": "c3"})
 
 
+def test_function_flags_marks_nothing_without_native_attrs():
+    # On r2 builds without function attributes every flag set is empty and
+    # _function_flags returns 0 - the exporter then matches all functions.
+    cache = _StubCache()
+    state.set_active_cache(cache)
+    try:
+        func = SimpleNamespace(start_ea=0x1000)
+        assert api._function_flags(func) == 0
+    finally:
+        state.set_active_cache(None)
+
+
 def test_is_iat_thunk():
     cache = _StubCache()
     cache.pe.iat_ranges = [(0x14000F000, 0x14000F100)]

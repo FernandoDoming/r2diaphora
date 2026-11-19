@@ -73,6 +73,27 @@ def test_parse_functions_reads_native_thunk_and_library_attrs():
     assert cache.noret_func_eas == {0x4000}
 
 
+def test_parse_functions_without_attrs_keeps_all_matchable():
+    # ``aflj`` from r2 builds that predate function attributes carries no
+    # ``thunk``/``attrs`` keys at all.  Nothing is marked, so the exporter
+    # keeps every function as a match candidate - no crash, no filtering.
+    cache = R2BinaryCache.__new__(R2BinaryCache)
+    cache.lib_func_eas = set()
+    cache.thunk_func_eas = set()
+    cache.noret_func_eas = set()
+    R2BinaryCache._parse_functions(
+        cache,
+        [
+            {"addr": 0x1000, "name": "sub_1000", "size": 6, "ninstrs": 1},
+            {"addr": 0x2000, "name": "main", "size": 16},
+        ],
+    )
+    assert not cache.thunk_func_eas
+    assert not cache.lib_func_eas
+    assert not cache.noret_func_eas
+    assert set(cache.functions) == {0x1000, 0x2000}
+
+
 def test_r2_binary_cache_on_calc_exe():
     cache = R2BinaryCache(CALC, load_pdb=False)
     try:
