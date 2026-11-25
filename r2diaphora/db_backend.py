@@ -17,6 +17,7 @@ from r2diaphora.upstream import load_upstream_diaphora
 
 BACKENDS = ("sqlite", "mariadb")
 DB_ATTRS_FILE = "db.json"
+DB_SUFFIX = ".sqlite"
 SQLITE_SUFFIXES = ("", "-wal", "-shm", "-crash")
 INDEX_TEXT_PREFIX = 255
 DEFAULT_DB_DIR = os.path.join(os.path.expanduser("~"), ".r2diaphora", "dbs")
@@ -302,6 +303,20 @@ def db_exists(dbname: str) -> bool:
     return os.path.isfile(dbname)
 
 
+def resolve_sqlite_db_path(name: str) -> str:
+    """Resolve a user-supplied SQLite database name to its file path.
+
+    Accepts a full path (returned as-is), a bare ``<sha256>`` digest or a
+    ``<sha256>.sqlite`` file name, the latter two looked up in the configured
+    db directory.
+    """
+    if os.path.dirname(name):
+        return name
+    if not name.endswith(DB_SUFFIX):
+        name += DB_SUFFIX
+    return os.path.join(get_db_dir(), name)
+
+
 def drop_db(dbname: str) -> None:
     if _state["backend"] == "mariadb":
         db = _mariadb_connect(dbname)
@@ -310,7 +325,7 @@ def drop_db(dbname: str) -> None:
         finally:
             close_all_connections(dbname)
         return
-    remove_db_file(dbname)
+    remove_db_file(resolve_sqlite_db_path(dbname))
 
 
 def drop_all(db_dir: Optional[str] = None) -> None:

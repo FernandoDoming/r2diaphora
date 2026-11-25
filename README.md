@@ -95,19 +95,6 @@ in candidate pairs and hits the 5-minute `SQL_TIMEOUT_LIMIT` on 4 MB+,
 far instead of dying. `pdgj` has ~0.5% run-to-run nondeterminism in
 register-name inference (an r2ghidra property, not a parallelism artifact).
 
-## Validation
-
-Tested against IDA Pro 9.5 exports on benign binaries and real malware samples
-(static analysis only — samples were never executed). Highlights:
-
-- Packed → Scylla-dumped twin: **829/829 (100%) best matches**, vs 52% for
-  the IDA-vs-IDA diff (IDA only exports ~200 functions from the packed file).
-- Same binary, IDA export vs r2 export: **zero wrong-address best matches**
-  on both a 32-bit and a 64-bit sample.
-- Field-level parity on x64 binaries is down to `kgh_hash`-only residuals
-  (IDA's typed struct-member data refs, which radare2 cannot reproduce).
-  32-bit binaries differ more (ESP frames, SEH, switch idioms).
-
 ## Safety
 
 r2diaphora only ever opens samples for static reading through radare2. It
